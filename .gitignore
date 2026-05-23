@@ -1,0 +1,8 @@
+node_modules/
+data/
+*.log
+.env
+.DS_Store
+/tmp/
+screenshot.py
+screenshot_live.py

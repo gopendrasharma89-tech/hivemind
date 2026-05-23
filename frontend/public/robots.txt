@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+Disallow: /api/v1/users/
+Disallow: /claim/
+
+Sitemap: /sitemap.xml
