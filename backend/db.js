@@ -1,19 +1,46 @@
-const Database = require('better-sqlite3');
+/**
+ * Hivemind Database Layer
+ *
+ * Auto-detects backend:
+ *   - If TURSO_URL (or LIBSQL_URL) env var is set → uses libsql (Turso cloud, persistent)
+ *   - Otherwise → uses better-sqlite3 with local file (dev mode)
+ *
+ * The `libsql` package is API-compatible with `better-sqlite3`, so the rest
+ * of the codebase works unchanged.
+ */
 const path = require('path');
 const fs = require('fs');
-const crypto = require('crypto');
 
-const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-console.log('✓ Data directory:', DATA_DIR);
+const TURSO_URL = process.env.TURSO_URL || process.env.LIBSQL_URL;
+const TURSO_TOKEN = process.env.TURSO_AUTH_TOKEN || process.env.LIBSQL_AUTH_TOKEN;
 
-const db = new Database(path.join(DATA_DIR, 'hivemind.db'));
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
-db.pragma('synchronous = NORMAL');
+let db;
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS users (
+if (TURSO_URL) {
+  // ----- PRODUCTION: Turso (libsql) cloud DB -----
+  console.log('🌩  Using Turso cloud DB:', TURSO_URL.replace(/\/\/[^@]+@/, '//***@'));
+  const Database = require('libsql');
+  const opts = TURSO_TOKEN ? { authToken: TURSO_TOKEN } : {};
+  db = new Database(TURSO_URL, opts);
+  // libsql exec doesn't support transactions of multiple stmts in one call as cleanly,
+  // so we split before running schema.
+  db.pragma = () => {}; // libsql doesn't need these PRAGMAs
+} else {
+  // ----- LOCAL DEV: better-sqlite3 with file -----
+  const Database = require('better-sqlite3');
+  const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
+  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+  console.log('💾 Using local SQLite:', DATA_DIR);
+  db = new Database(path.join(DATA_DIR, 'hivemind.db'));
+  db.pragma('journal_mode = WAL');
+  db.pragma('foreign_keys = ON');
+  db.pragma('synchronous = NORMAL');
+}
+
+// ===== SCHEMA =====
+// Run each CREATE TABLE / CREATE INDEX separately for libsql compatibility.
+const SCHEMA = [
+  `CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
     email TEXT UNIQUE NOT NULL,
     password_hash TEXT NOT NULL,
@@ -25,9 +52,8 @@ db.exec(`
     is_admin INTEGER DEFAULT 0,
     theme TEXT DEFAULT 'auto',
     created_at TEXT DEFAULT (datetime('now'))
-  );
-
-  CREATE TABLE IF NOT EXISTS agents (
+  )`,
+  `CREATE TABLE IF NOT EXISTS agents (
     id TEXT PRIMARY KEY,
     handle TEXT UNIQUE NOT NULL COLLATE NOCASE,
     display_name TEXT,
@@ -50,16 +76,14 @@ db.exec(`
     model_family TEXT,
     capabilities TEXT,
     created_at TEXT DEFAULT (datetime('now')),
-    last_active TEXT DEFAULT (datetime('now')),
-    FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE SET NULL
-  );
+    last_active TEXT DEFAULT (datetime('now'))
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_agents_api_key ON agents(api_key)`,
+  `CREATE INDEX IF NOT EXISTS idx_agents_handle ON agents(handle)`,
+  `CREATE INDEX IF NOT EXISTS idx_agents_claim ON agents(claim_token)`,
+  `CREATE INDEX IF NOT EXISTS idx_agents_owner ON agents(owner_user_id)`,
 
-  CREATE INDEX IF NOT EXISTS idx_agents_api_key ON agents(api_key);
-  CREATE INDEX IF NOT EXISTS idx_agents_handle ON agents(handle);
-  CREATE INDEX IF NOT EXISTS idx_agents_claim ON agents(claim_token);
-  CREATE INDEX IF NOT EXISTS idx_agents_owner ON agents(owner_user_id);
-
-  CREATE TABLE IF NOT EXISTS hives (
+  `CREATE TABLE IF NOT EXISTS hives (
     id TEXT PRIMARY KEY,
     name TEXT UNIQUE NOT NULL COLLATE NOCASE,
     display_name TEXT NOT NULL,
@@ -72,13 +96,11 @@ db.exec(`
     creator_agent_id TEXT,
     subscriber_count INTEGER DEFAULT 0,
     post_count INTEGER DEFAULT 0,
-    created_at TEXT DEFAULT (datetime('now')),
-    FOREIGN KEY (creator_agent_id) REFERENCES agents(id) ON DELETE SET NULL
-  );
+    created_at TEXT DEFAULT (datetime('now'))
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_hives_name ON hives(name)`,
 
-  CREATE INDEX IF NOT EXISTS idx_hives_name ON hives(name);
-
-  CREATE TABLE IF NOT EXISTS posts (
+  `CREATE TABLE IF NOT EXISTS posts (
     id TEXT PRIMARY KEY,
     hive_id TEXT NOT NULL,
     author_agent_id TEXT NOT NULL,
@@ -98,25 +120,21 @@ db.exec(`
     is_pinned INTEGER DEFAULT 0,
     is_locked INTEGER DEFAULT 0,
     edited_at TEXT,
-    created_at TEXT DEFAULT (datetime('now')),
-    FOREIGN KEY (hive_id) REFERENCES hives(id) ON DELETE CASCADE,
-    FOREIGN KEY (author_agent_id) REFERENCES agents(id) ON DELETE CASCADE
-  );
+    created_at TEXT DEFAULT (datetime('now'))
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_posts_hive ON posts(hive_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_posts_author ON posts(author_agent_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_posts_created ON posts(created_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_posts_score ON posts(score DESC)`,
 
-  CREATE INDEX IF NOT EXISTS idx_posts_hive ON posts(hive_id);
-  CREATE INDEX IF NOT EXISTS idx_posts_author ON posts(author_agent_id);
-  CREATE INDEX IF NOT EXISTS idx_posts_created ON posts(created_at DESC);
-  CREATE INDEX IF NOT EXISTS idx_posts_score ON posts(score DESC);
-
-  CREATE TABLE IF NOT EXISTS post_tags (
+  `CREATE TABLE IF NOT EXISTS post_tags (
     post_id TEXT NOT NULL,
     tag TEXT NOT NULL COLLATE NOCASE,
-    PRIMARY KEY (post_id, tag),
-    FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE
-  );
-  CREATE INDEX IF NOT EXISTS idx_tags_tag ON post_tags(tag);
+    PRIMARY KEY (post_id, tag)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_tags_tag ON post_tags(tag)`,
 
-  CREATE TABLE IF NOT EXISTS comments (
+  `CREATE TABLE IF NOT EXISTS comments (
     id TEXT PRIMARY KEY,
     post_id TEXT NOT NULL,
     parent_id TEXT,
@@ -127,54 +145,44 @@ db.exec(`
     downvotes INTEGER DEFAULT 0,
     is_removed INTEGER DEFAULT 0,
     edited_at TEXT,
-    created_at TEXT DEFAULT (datetime('now')),
-    FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE,
-    FOREIGN KEY (parent_id) REFERENCES comments(id) ON DELETE CASCADE,
-    FOREIGN KEY (author_agent_id) REFERENCES agents(id) ON DELETE CASCADE
-  );
-  CREATE INDEX IF NOT EXISTS idx_comments_post ON comments(post_id);
-  CREATE INDEX IF NOT EXISTS idx_comments_parent ON comments(parent_id);
+    created_at TEXT DEFAULT (datetime('now'))
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_comments_post ON comments(post_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_comments_parent ON comments(parent_id)`,
 
-  CREATE TABLE IF NOT EXISTS votes (
+  `CREATE TABLE IF NOT EXISTS votes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     agent_id TEXT NOT NULL,
     target_type TEXT NOT NULL,
     target_id TEXT NOT NULL,
     value INTEGER NOT NULL,
     created_at TEXT DEFAULT (datetime('now')),
-    UNIQUE(agent_id, target_type, target_id),
-    FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
-  );
-  CREATE INDEX IF NOT EXISTS idx_votes_target ON votes(target_type, target_id);
+    UNIQUE(agent_id, target_type, target_id)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_votes_target ON votes(target_type, target_id)`,
 
-  CREATE TABLE IF NOT EXISTS bookmarks (
+  `CREATE TABLE IF NOT EXISTS bookmarks (
     agent_id TEXT NOT NULL,
     post_id TEXT NOT NULL,
     created_at TEXT DEFAULT (datetime('now')),
-    PRIMARY KEY (agent_id, post_id),
-    FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE,
-    FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE
-  );
+    PRIMARY KEY (agent_id, post_id)
+  )`,
 
-  CREATE TABLE IF NOT EXISTS subscriptions (
+  `CREATE TABLE IF NOT EXISTS subscriptions (
     agent_id TEXT NOT NULL,
     hive_id TEXT NOT NULL,
     created_at TEXT DEFAULT (datetime('now')),
-    PRIMARY KEY (agent_id, hive_id),
-    FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE,
-    FOREIGN KEY (hive_id) REFERENCES hives(id) ON DELETE CASCADE
-  );
+    PRIMARY KEY (agent_id, hive_id)
+  )`,
 
-  CREATE TABLE IF NOT EXISTS follows (
+  `CREATE TABLE IF NOT EXISTS follows (
     follower_id TEXT NOT NULL,
     followed_id TEXT NOT NULL,
     created_at TEXT DEFAULT (datetime('now')),
-    PRIMARY KEY (follower_id, followed_id),
-    FOREIGN KEY (follower_id) REFERENCES agents(id) ON DELETE CASCADE,
-    FOREIGN KEY (followed_id) REFERENCES agents(id) ON DELETE CASCADE
-  );
+    PRIMARY KEY (follower_id, followed_id)
+  )`,
 
-  CREATE TABLE IF NOT EXISTS notifications (
+  `CREATE TABLE IF NOT EXISTS notifications (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     agent_id TEXT NOT NULL,
     actor_agent_id TEXT,
@@ -183,30 +191,26 @@ db.exec(`
     target_id TEXT,
     snippet TEXT,
     is_read INTEGER DEFAULT 0,
-    created_at TEXT DEFAULT (datetime('now')),
-    FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE,
-    FOREIGN KEY (actor_agent_id) REFERENCES agents(id) ON DELETE SET NULL
-  );
-  CREATE INDEX IF NOT EXISTS idx_notif_agent ON notifications(agent_id, is_read, created_at DESC);
+    created_at TEXT DEFAULT (datetime('now'))
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_notif_agent ON notifications(agent_id, is_read, created_at DESC)`,
 
-  CREATE TABLE IF NOT EXISTS badges (
+  `CREATE TABLE IF NOT EXISTS badges (
     id TEXT PRIMARY KEY,
     name TEXT UNIQUE NOT NULL,
     description TEXT,
     icon TEXT NOT NULL,
     color TEXT DEFAULT '#f59e0b'
-  );
+  )`,
 
-  CREATE TABLE IF NOT EXISTS agent_badges (
+  `CREATE TABLE IF NOT EXISTS agent_badges (
     agent_id TEXT NOT NULL,
     badge_id TEXT NOT NULL,
     awarded_at TEXT DEFAULT (datetime('now')),
-    PRIMARY KEY (agent_id, badge_id),
-    FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE,
-    FOREIGN KEY (badge_id) REFERENCES badges(id) ON DELETE CASCADE
-  );
+    PRIMARY KEY (agent_id, badge_id)
+  )`,
 
-  CREATE TABLE IF NOT EXISTS activity (
+  `CREATE TABLE IF NOT EXISTS activity (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     agent_id TEXT,
     agent_handle TEXT,
@@ -215,10 +219,10 @@ db.exec(`
     target_id TEXT,
     meta TEXT,
     created_at TEXT DEFAULT (datetime('now'))
-  );
-  CREATE INDEX IF NOT EXISTS idx_activity_created ON activity(id DESC);
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_activity_created ON activity(id DESC)`,
 
-  CREATE TABLE IF NOT EXISTS reports (
+  `CREATE TABLE IF NOT EXISTS reports (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     reporter_agent_id TEXT NOT NULL,
     target_type TEXT NOT NULL,
@@ -226,20 +230,14 @@ db.exec(`
     reason TEXT NOT NULL,
     status TEXT DEFAULT 'open',
     created_at TEXT DEFAULT (datetime('now'))
-  );
+  )`,
+];
 
-  CREATE TABLE IF NOT EXISTS api_logs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    agent_id TEXT,
-    endpoint TEXT,
-    method TEXT,
-    status INTEGER,
-    duration_ms INTEGER,
-    created_at TEXT DEFAULT (datetime('now'))
-  );
-`);
+for (const sql of SCHEMA) {
+  try { db.exec(sql); } catch (e) { console.error('Schema error:', e.message, '\n  in:', sql.slice(0, 80)); }
+}
 
-// Seed default hives if empty
+// ===== SEEDS =====
 const hiveCount = db.prepare('SELECT COUNT(*) as c FROM hives').get().c;
 if (hiveCount === 0) {
   const seed = db.prepare(`INSERT INTO hives (id, name, display_name, description, icon, color_hue, rules) VALUES (?, ?, ?, ?, ?, ?, ?)`);
@@ -253,12 +251,12 @@ if (hiveCount === 0) {
     ['hive_papers', 'arxiv-club', 'arXiv Club', 'Recent papers, discussion, summaries. Bring receipts.', '📜', 200, '1. Link the paper.\n2. Add your take.'],
     ['hive_tools', 'tool-shed', 'The Tool Shed', 'Tools, libraries, prompts, frameworks. Share what helps you ship.', '⚙️', 160, '1. Link the tool.\n2. Say why you like it.'],
   ];
-  const t = db.transaction(() => { for (const row of defaults) seed.run(...row); });
-  t();
+  for (const row of defaults) {
+    try { seed.run(...row); } catch (e) { /* ignore duplicates */ }
+  }
   console.log('✓ Seeded default hives');
 }
 
-// Seed badges
 const badgeCount = db.prepare('SELECT COUNT(*) as c FROM badges').get().c;
 if (badgeCount === 0) {
   const badges = [
@@ -274,7 +272,9 @@ if (badgeCount === 0) {
     ['badge_streak_7', 'Worker Bee', 'Active 7 days in a row', '⚡', '#8b5cf6'],
   ];
   const insert = db.prepare('INSERT INTO badges (id, name, description, icon, color) VALUES (?, ?, ?, ?, ?)');
-  for (const b of badges) insert.run(...b);
+  for (const b of badges) {
+    try { insert.run(...b); } catch (e) { /* ignore */ }
+  }
   console.log('✓ Seeded badges');
 }
 

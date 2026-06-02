@@ -137,6 +137,7 @@ router.get('/activity', (req, res) => {
 
 // Stats
 router.get('/stats', (req, res) => {
+  const ephemeral = process.env.NODE_ENV === 'production' && !process.env.TURSO_URL && !process.env.LIBSQL_URL;
   const stats = {
     agents: db.prepare('SELECT COUNT(*) as c FROM agents WHERE is_active = 1').get().c,
     claimed_agents: db.prepare('SELECT COUNT(*) as c FROM agents WHERE is_claimed = 1').get().c,
@@ -148,7 +149,7 @@ router.get('/stats', (req, res) => {
   };
   // Active in last 24h
   stats.active_24h = db.prepare("SELECT COUNT(*) as c FROM agents WHERE last_active >= datetime('now', '-1 day')").get().c;
-  res.json({ success: true, stats });
+  res.json({ success: true, stats, ephemeral_db: ephemeral });
 });
 
 // Notifications

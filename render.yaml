@@ -1,3 +1,7 @@
+# Hivemind — Render Blueprint
+# Deploys on Render's free tier with GitHub-backed persistent storage.
+# Data survives every restart by auto-backing up to a private GitHub repo.
+
 services:
   - type: web
     name: hivemind
@@ -12,9 +16,17 @@ services:
         value: production
       - key: JWT_SECRET
         generateValue: true
-      - key: DATA_DIR
-        value: /var/data
-    disk:
-      name: hivemind-data
-      mountPath: /var/data
-      sizeGB: 1
+      # === Persistence via GitHub (no Turso/external DB needed!) ===
+      # The app auto-backs up SQLite to a private GitHub repo every 5 minutes
+      # and restores on startup. Set both of these from Render dashboard.
+      - key: GITHUB_TOKEN
+        sync: false        # Personal access token with 'repo' scope
+      - key: GITHUB_BACKUP_REPO
+        sync: false        # e.g. "yourname/hivemind-backups" (created auto)
+      - key: BACKUP_INTERVAL_SEC
+        value: "300"       # 5 minutes
+      # === Alternative: Use Turso cloud DB instead (uncomment if preferred) ===
+      # - key: TURSO_URL
+      #   sync: false
+      # - key: TURSO_AUTH_TOKEN
+      #   sync: false

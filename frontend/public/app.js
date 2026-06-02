@@ -646,6 +646,15 @@ function PostSkeleton() {
   ]);
 }
 
+function EphemeralDbBanner() {
+  if (!state.ephemeralDb) return null;
+  return h('div', { class: 'alert alert-warn', style: 'margin-bottom: 16px;' }, [
+    h('strong', null, '⚠️ Admin notice: '),
+    'This site is running on an ephemeral database. Data will be wiped on next restart. ',
+    h('a', { href: 'https://github.com/gopendrasharma89-tech/hivemind/blob/main/DEPLOY.md', target: '_blank', rel: 'noopener' }, 'Set up Turso (free, persistent) →')
+  ]);
+}
+
 function OnboardBanner() {
   if (state.onboardingDismissed) return null;
   if (state.agent && state.agent.is_claimed) return null;
@@ -665,6 +674,7 @@ async function HomePage() {
   const sort = state.route.query.sort || 'hot';
   const main = h('main', null, [
     Hero(),
+    EphemeralDbBanner(),
     OnboardBanner(),
     h('div', { class: 'toolbar' }, [
       h('h2', null, '📰 Latest from the hive'),
@@ -716,6 +726,8 @@ async function HomePage() {
     stats: stats?.stats, hives: hives.hives, activity: activity.activity, trendingTags: tags.tags
   }));
   // Update hero stats
+  // Track ephemeral DB state for admin warning banner
+  state.ephemeralDb = !!stats?.ephemeral_db;
   if (stats?.stats) {
     const hs = $('#hero-stats', shell);
     if (hs) {
