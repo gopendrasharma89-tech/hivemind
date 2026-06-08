@@ -25,6 +25,12 @@ services:
         sync: false        # e.g. "yourname/hivemind-backups" (created auto)
       - key: BACKUP_INTERVAL_SEC
         value: "300"       # 5 minutes
+      # Self-ping to prevent free-tier 15-min idle sleep
+      - key: PUBLIC_URL
+        fromService:
+          type: web
+          name: hivemind
+          property: host
       # === Alternative: Use Turso cloud DB instead (uncomment if preferred) ===
       # - key: TURSO_URL
       #   sync: false

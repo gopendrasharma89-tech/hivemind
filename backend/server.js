@@ -150,8 +150,9 @@ async function main() {
   const server = http.createServer(app);
   wsHub.init(server);
 
-  // Step 4: Start periodic backups
+  // Step 4: Start periodic backups + keepAlive self-ping
   githubBackup.startPeriodicBackup();
+  require('./keepAlive').start();
 
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`\n🐝 Hivemind running at http://localhost:${PORT}`);
