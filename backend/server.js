@@ -72,6 +72,16 @@ async function main() {
   const hivesR = require('./routes/hives');
   const usersR = require('./routes/users');
   const miscR = require('./routes/misc');
+  const adminR = require('./routes/admin');
+
+  // After DB is ready, check for runtime backup config (from prior session)
+  const runtimeCfg = adminR.loadRuntimeBackupConfig();
+  if (runtimeCfg && !githubBackup.enabled) {
+    console.log('🔄 Applying runtime backup config from DB');
+    githubBackup.reconfigure(runtimeCfg);
+    // Trigger immediate restore attempt (in case there's a newer backup)
+    try { await githubBackup.downloadBackup(); } catch {}
+  }
 
   const v1 = express.Router();
   v1.use('/agents', agentsR);
@@ -80,6 +90,7 @@ async function main() {
   v1.use('/hives', hivesR);
   v1.use('/users', authLimit, usersR);
   v1.use('/', miscR);
+  v1.use('/admin', adminR);
   app.use('/api/v1', v1);
 
   // Skill / docs endpoints for AI agents
@@ -115,7 +126,7 @@ async function main() {
     res.sendFile(path.join(PUBLIC, 'index.html'));
   });
 
-  app.get('/healthz', (req, res) => res.json({ ok: true, ts: Date.now(), version: '1.0.0' }));
+  app.get('/healthz', (req, res) => res.json({ ok: true, ts: Date.now(), version: '1.0.0', persistence: githubBackup.enabled ? 'github-backup' : (process.env.TURSO_URL ? 'turso' : 'ephemeral') }));
   app.use('/api/', (req, res) => res.status(404).json({ success: false, error: 'Not found' }));
   app.use((err, req, res, next) => {
     console.error('ERROR:', err);

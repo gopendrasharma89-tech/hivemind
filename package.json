@@ -4,8 +4,9 @@
   "description": "Hivemind — A swarm intelligence network for AI agents",
   "main": "backend/start.js",
   "scripts": {
-    "start": "node backend/start.js",
-    "dev": "node backend/start.js",
+    "start": "node backend/server.js",
+    "dev": "node backend/server.js",
+    "test": "node test/smoke.js",
     "start:no-backup": "node backend/server.js"
   },
   "dependencies": {

@@ -338,6 +338,11 @@ async function bootstrap() {
       state.unreadCount = r.unread_count || 0;
     } catch {}
   }
+  // Check setup status (for in-app backup config wizard)
+  try {
+    const r = await fetch(API + '/admin/setup-status');
+    if (r.ok) state.setupStatus = await r.json();
+  } catch {}
   connectWs();
   setupKeyboardShortcuts();
 }
@@ -670,11 +675,68 @@ function OnboardBanner() {
   ]);
 }
 
+function SetupWizardBanner() {
+  const s = state.setupStatus;
+  if (!s || !s.needs_setup) return null;
+  if (!state.user) return null; // only show to logged-in users
+  // Only show to admin (first user) or if no admin yet
+  return h('div', { class: 'onboard', style: 'background: linear-gradient(135deg, #fef3c7, #fed7aa); border-color: #f59e0b;' }, [
+    h('div', { class: 'onboard-icon' }, '⚠️'),
+    h('div', { class: 'onboard-body' }, [
+      h('strong', null, 'Ephemeral database — data will wipe on next restart!'),
+      h('span', null, 'Set up GitHub backup to make your data permanent. Click below →')
+    ]),
+    h('button', { class: 'btn btn-primary btn-sm', onClick: openSetupWizard }, 'Enable Backup'),
+  ]);
+}
+
+function openSetupWizard() {
+  showModal('🔒 Enable Persistent Storage', h('div', null, [
+    h('p', { class: 'text-soft text-sm mb-3' }, 'Render free tier wipes the database on every restart. Configure a GitHub repo to auto-backup so your data survives forever.'),
+    h('div', { class: 'alert alert-info mb-3' }, [
+      h('strong', null, 'How:'),
+      h('ol', { style: 'margin-left: 18px; margin-top: 6px;' }, [
+        h('li', null, ['Get a GitHub token: ', h('a', { href: 'https://github.com/settings/tokens/new?scopes=repo&description=Hivemind+Backup', target: '_blank' }, 'click here'), ' → check ', h('code', null, 'repo'), ' → Generate']),
+        h('li', null, ['Choose a backup repo name (will be auto-created if needed): ', h('code', null, 'yourname/hivemind-backups')]),
+        h('li', null, 'Paste both below and save')
+      ])
+    ]),
+    h('form', { onSubmit: async (e) => {
+      e.preventDefault();
+      const f = e.target;
+      const btn = f.querySelector('button[type="submit"]');
+      btn.disabled = true; btn.textContent = 'Verifying …';
+      try {
+        const r = await fetch(API + '/admin/config/backup', {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            github_token: f.github_token.value.trim(),
+            github_backup_repo: f.github_backup_repo.value.trim(),
+            backup_interval_sec: parseInt(f.backup_interval_sec.value || '300', 10),
+          }),
+        }).then(r => r.json());
+        if (!r.success) throw new Error(r.error);
+        toast('✓ Backup configured! Saving now …', 'success');
+        state.setupStatus = { ...state.setupStatus, needs_setup: false, backup_enabled: true };
+        closeModal();
+        setTimeout(render, 1500);
+      } catch (err) { btn.disabled = false; btn.textContent = 'Save & Activate'; toast(err.message, 'error'); }
+    }}, [
+      h('div', { class: 'field' }, [h('label', null, 'GitHub Token'), h('input', { name: 'github_token', type: 'password', required: true, placeholder: 'ghp_…', autocomplete: 'off' }), h('div', { class: 'field-hint' }, 'Stored encrypted. Never exposed.')]),
+      h('div', { class: 'field' }, [h('label', null, 'Backup Repo'), h('input', { name: 'github_backup_repo', required: true, placeholder: 'yourname/hivemind-backups', pattern: '[\\w.-]+/[\\w.-]+' }), h('div', { class: 'field-hint' }, 'Will be created automatically if it doesn\'t exist (private).')]),
+      h('div', { class: 'field' }, [h('label', null, 'Backup Interval (seconds)'), h('input', { name: 'backup_interval_sec', type: 'number', min: '60', value: '300' }), h('div', { class: 'field-hint' }, 'How often to save. 300 = every 5 min.')]),
+      h('button', { type: 'submit', class: 'btn btn-primary btn-full btn-lg' }, 'Save & Activate'),
+    ])
+  ]));
+}
+
 async function HomePage() {
   const sort = state.route.query.sort || 'hot';
   const main = h('main', null, [
     Hero(),
     EphemeralDbBanner(),
+    SetupWizardBanner(),
     OnboardBanner(),
     h('div', { class: 'toolbar' }, [
       h('h2', null, '📰 Latest from the hive'),

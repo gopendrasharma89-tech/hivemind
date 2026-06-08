@@ -20,12 +20,15 @@ const path = require('path');
 const https = require('https');
 const zlib = require('zlib');
 
-const TOKEN = process.env.GITHUB_TOKEN;
-const REPO = process.env.GITHUB_BACKUP_REPO;
-const BRANCH = process.env.GITHUB_BACKUP_BRANCH || 'main';
-const INTERVAL = parseInt(process.env.BACKUP_INTERVAL_SEC || '300', 10) * 1000;
+// Mutable runtime config (can be reconfigured via admin endpoint)
+let TOKEN = process.env.GITHUB_TOKEN || null;
+let REPO = process.env.GITHUB_BACKUP_REPO || null;
+let BRANCH = process.env.GITHUB_BACKUP_BRANCH || 'main';
+let INTERVAL = parseInt(process.env.BACKUP_INTERVAL_SEC || '300', 10) * 1000;
+let intervalHandle = null;
 
-const enabled = !!(TOKEN && REPO);
+function isEnabled() { return !!(TOKEN && REPO); }
+const enabled = isEnabled();
 const DB_PATH = path.join(process.env.DATA_DIR || path.join(__dirname, '..', 'data'), 'hivemind.db');
 const BACKUP_PATH = 'data/hivemind.db.gz';
 
@@ -90,7 +93,7 @@ async function ensureRepoExists() {
 }
 
 async function downloadBackup() {
-  if (!enabled) return false;
+  if (!isEnabled()) return false;
   try {
     const file = await gh('GET', `/repos/${REPO}/contents/${BACKUP_PATH}?ref=${BRANCH}`);
     if (!file || !file.content) return false;
@@ -115,7 +118,7 @@ let backing_up = false;
 let lastHash = null;
 
 async function uploadBackup(forceFinal = false) {
-  if (!enabled) return false;
+  if (!isEnabled()) return false;
   if (backing_up) return false;
   if (!fs.existsSync(DB_PATH)) return false;
   backing_up = true;
@@ -161,9 +164,10 @@ async function uploadBackup(forceFinal = false) {
 }
 
 function startPeriodicBackup() {
-  if (!enabled) return;
+  if (!isEnabled()) return;
+  if (intervalHandle) return; // already running
   console.log(`💾 GitHub backup enabled: ${REPO} (every ${INTERVAL / 1000}s)`);
-  setInterval(() => { uploadBackup().catch(() => {}); }, INTERVAL);
+  intervalHandle = setInterval(() => { uploadBackup().catch(() => {}); }, INTERVAL);
   // Final backup on shutdown
   const onExit = async () => {
     console.log('🛑 Shutdown: flushing final backup...');
@@ -174,11 +178,23 @@ function startPeriodicBackup() {
   process.on('SIGINT', onExit);
 }
 
+function reconfigure({ token, repo, branch, intervalSec }) {
+  if (token) TOKEN = token;
+  if (repo) REPO = repo;
+  if (branch) BRANCH = branch;
+  if (intervalSec) INTERVAL = intervalSec * 1000;
+  lastSha = null; lastHash = null;
+  if (intervalHandle) { clearInterval(intervalHandle); intervalHandle = null; }
+  startPeriodicBackup();
+  console.log(`✅ Backup reconfigured: ${REPO} (every ${INTERVAL / 1000}s)`);
+}
+
 module.exports = {
-  enabled,
+  get enabled() { return isEnabled(); },
+  reconfigure,
   async init() {
-    if (!enabled) {
-      console.log('ℹ GitHub backup disabled (set GITHUB_TOKEN + GITHUB_BACKUP_REPO to enable)');
+    if (!isEnabled()) {
+      console.log('ℹ GitHub backup disabled (no env vars; will check runtime config after DB loads)');
       return;
     }
     try {
