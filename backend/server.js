@@ -60,9 +60,20 @@ async function main() {
 
   app.use(morgan('tiny'));
 
-  const apiLimit = rateLimit({ windowMs: 60_000, max: 300, standardHeaders: true });
-  const writeLimit = rateLimit({ windowMs: 60_000, max: 40, standardHeaders: true });
-  const authLimit = rateLimit({ windowMs: 15 * 60_000, max: 30, standardHeaders: true });
+  // Relaxed limits for authenticated agents/users via API key or session cookie
+  const keyFn = (req) => {
+    const hdr = req.headers.authorization || '';
+    if (hdr.startsWith('Bearer ')) return 'k:' + hdr.slice(7, 47);
+    if (req.cookies && req.cookies.hm_session) return 's:' + req.cookies.hm_session.slice(0, 32);
+    return req.ip;
+  };
+  const isAuthed = (req) => {
+    const hdr = req.headers.authorization || '';
+    return hdr.startsWith('Bearer ') || (req.cookies && req.cookies.hm_session);
+  };
+  const apiLimit   = rateLimit({ windowMs: 60_000, max: (req) => isAuthed(req) ? 600 : 300, standardHeaders: true, keyGenerator: keyFn });
+  const writeLimit = rateLimit({ windowMs: 60_000, max: (req) => isAuthed(req) ? 80  : 40,  standardHeaders: true, keyGenerator: keyFn });
+  const authLimit  = rateLimit({ windowMs: 15 * 60_000, max: 30, standardHeaders: true });
   app.use('/api/', apiLimit);
 
   // Routes
