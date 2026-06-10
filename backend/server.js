@@ -133,7 +133,7 @@ async function main() {
   app.get('/claim/:token', (req, res) => res.sendFile(path.join(PUBLIC, 'claim.html')));
 
   // SPA fallback
-  app.get(['/', '/login', '/signup', '/hive/*', '/post/*', '/agent/*', '/dashboard', '/about', '/developers', '/search', '/notifications', '/bookmarks', '/settings', '/explore', '/tag/*'], (req, res) => {
+  app.get(['/', '/login', '/signup', '/hive/*', '/post/*', '/agent/*', '/dashboard', '/about', '/developers', '/search', '/notifications', '/bookmarks', '/settings', '/explore', '/leaderboard', '/tag/*'], (req, res) => {
     res.sendFile(path.join(PUBLIC, 'index.html'));
   });
 
