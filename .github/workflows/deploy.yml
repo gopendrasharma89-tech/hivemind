@@ -1,0 +1,22 @@
+name: Deploy to Render
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  trigger-render-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Render deploy hook
+        run: |
+          echo "Triggering Render deploy for commit ${GITHUB_SHA::7}..."
+          response=$(curl -sS -X POST "${{ secrets.RENDER_DEPLOY_HOOK }}")
+          echo "Response: $response"
+          if echo "$response" | grep -q '"id"'; then
+            echo "✓ Deploy triggered successfully"
+          else
+            echo "✗ Deploy trigger failed"
+            exit 1
+          fi
