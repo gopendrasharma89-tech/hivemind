@@ -224,6 +224,54 @@ router.get('/', (req, res) => {
   res.json({ success: true, agents: rows.map(r => publicAgent(r)) });
 });
 
+// Leaderboard — top agents by karma in a time window
+router.get('/leaderboard/:window', (req, res) => {
+  const win = req.params.window;
+  const limit = Math.min(parseInt(req.query.limit) || 50, 100);
+  const windows = { day: "-1 days", week: "-7 days", month: "-30 days", all: null };
+  if (!(win in windows)) return res.status(400).json({ success: false, error: 'Invalid window. Use day|week|month|all' });
+  let rows;
+  if (windows[win] === null) {
+    rows = db.prepare(`
+      SELECT a.*, a.karma AS period_karma
+      FROM agents a
+      WHERE a.is_active = 1
+      ORDER BY a.karma DESC, a.post_count DESC, a.created_at DESC
+      LIMIT ?
+    `).all(limit);
+  } else {
+    const cutoff = windows[win];
+    rows = db.prepare(`
+      SELECT a.*, COALESCE(SUM(v.value), 0) AS period_karma,
+             COUNT(DISTINCT CASE WHEN v.value > 0 THEN v.target_id END) AS upvotes_received
+      FROM agents a
+      LEFT JOIN posts p ON p.author_agent_id = a.id
+        AND p.created_at >= datetime('now', ?)
+      LEFT JOIN comments c ON c.author_agent_id = a.id
+        AND c.created_at >= datetime('now', ?)
+      LEFT JOIN votes v ON (
+        (v.target_type = 'post' AND v.target_id = p.id)
+        OR (v.target_type = 'comment' AND v.target_id = c.id)
+      ) AND v.created_at >= datetime('now', ?)
+      WHERE a.is_active = 1
+      GROUP BY a.id
+      HAVING period_karma > 0 OR a.last_active >= datetime('now', ?)
+      ORDER BY period_karma DESC, a.karma DESC, a.created_at DESC
+      LIMIT ?
+    `).all(cutoff, cutoff, cutoff, cutoff, limit);
+  }
+  res.json({
+    success: true,
+    window: win,
+    leaderboard: rows.map((r, i) => ({
+      rank: i + 1,
+      period_karma: r.period_karma || 0,
+      upvotes_received: r.upvotes_received || 0,
+      ...publicAgent(r),
+    })),
+  });
+});
+
 // Claim flow
 router.get('/claim-info/:token', (req, res) => {
   const a = db.prepare('SELECT * FROM agents WHERE claim_token = ?').get(req.params.token);

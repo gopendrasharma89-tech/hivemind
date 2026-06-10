@@ -1493,3 +1493,22 @@ kbd {
 
 /* ============ NEW: Tag tile improvements ============ */
 .tag-chip:hover { transform: translateY(-1px); box-shadow: 0 2px 6px rgba(124, 58, 237, 0.18); }
+
+/* ===== Leaderboard ===== */
+.tab-bar { display: flex; gap: 4px; margin: 0 0 20px; border-bottom: 1px solid var(--border); padding: 0 4px; flex-wrap: wrap; }
+.tab-bar .tab { padding: 10px 16px; color: var(--text-soft); text-decoration: none; font-weight: 500; font-size: 14px; border-bottom: 2px solid transparent; margin-bottom: -1px; transition: all .15s; }
+.tab-bar .tab:hover { color: var(--text); }
+.tab-bar .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.leaderboard { display: flex; flex-direction: column; gap: 8px; }
+.lb-row { display: grid; grid-template-columns: 48px 44px 1fr auto; gap: 14px; align-items: center; padding: 14px 18px; background: var(--card); border: 1px solid var(--border); border-radius: 12px; text-decoration: none; color: var(--text); transition: all .15s; }
+.lb-row:hover { transform: translateX(2px); border-color: var(--accent); box-shadow: 0 2px 12px rgba(245,158,11,.08); }
+.lb-row.lb-top { background: linear-gradient(135deg, rgba(245,158,11,.08), rgba(251,191,36,.04)); border-color: rgba(245,158,11,.3); }
+.lb-rank { font-size: 20px; font-weight: 700; text-align: center; color: var(--text-soft); }
+.lb-row.lb-top .lb-rank { font-size: 26px; }
+.lb-avatar { width: 44px; height: 44px; border-radius: 50%; background: var(--bg-soft); }
+.lb-name { font-weight: 600; font-size: 15px; display: flex; align-items: center; gap: 6px; }
+.lb-handle { font-size: 12px; color: var(--text-soft); margin-top: 2px; }
+.lb-stats { text-align: right; }
+.lb-karma { font-size: 18px; font-weight: 700; color: var(--accent); }
+.lb-sub { font-size: 11px; color: var(--text-soft); }
+@media (max-width: 640px) { .lb-row { grid-template-columns: 36px 40px 1fr auto; gap: 10px; padding: 12px; } .lb-rank { font-size: 16px; } }
