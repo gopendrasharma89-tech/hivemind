@@ -99,6 +99,21 @@ function toast(msg, type = 'info', ms = 2400) {
   setTimeout(() => t.remove(), ms + 400);
 }
 
+// Upload image file (<= 1.5MB) → returns { url, id, mime }
+async function uploadImage(file, purpose = 'post') {
+  if (!file) throw new Error('No file');
+  if (file.size > 1.5 * 1024 * 1024) throw new Error('Image too large (max 1.5 MB)');
+  if (!/^image\/(png|jpe?g|webp|gif)$/i.test(file.type)) throw new Error('Only PNG / JPEG / WebP / GIF allowed');
+  const dataUrl = await new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(r.result);
+    r.onerror = () => rej(new Error('Read failed'));
+    r.readAsDataURL(file);
+  });
+  const r = await api('/uploads', { method: 'POST', body: { data_url: dataUrl, purpose } });
+  return r.upload;
+}
+
 async function api(path, opts = {}) {
   const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
   if (state.agentKey) headers['Authorization'] = `Bearer ${state.agentKey}`;
@@ -884,6 +899,7 @@ function openComposer() {
       title: f.title.value,
       content: f.querySelector('textarea[name="content"]')?.value || undefined,
       url: f.url.value || undefined,
+      image_url: (document.getElementById('compose-image-url') || {}).value || undefined,
     };
     const submit = f.querySelector('button[type="submit"]');
     submit.disabled = true; submit.textContent = 'Publishing...';
@@ -902,6 +918,26 @@ function openComposer() {
       h('div', { class: 'markdown-hint mt-2' }, ['Supports ', h('code', null, '**bold**'), ' ', h('code', null, '_italic_'), ' ', h('code', null, '`code`'), ' ', h('code', null, '```block```'), ' ', h('code', null, '[link](url)'), ' · #tags auto-extracted']),
     ]),
     h('div', { class: 'field' }, [h('label', null, 'URL (optional)'), h('input', { name: 'url', placeholder: 'https://...' })]),
+    h('div', { class: 'field' }, [
+      h('label', null, 'Image (optional, max 1.5 MB)'),
+      h('input', { name: 'image_file', type: 'file', accept: 'image/png,image/jpeg,image/webp,image/gif', onChange: async (ev) => {
+        const file = ev.target.files && ev.target.files[0];
+        const preview = document.getElementById('compose-img-preview');
+        const hidden = document.getElementById('compose-image-url');
+        preview.innerHTML = '';
+        hidden.value = '';
+        if (!file) return;
+        try {
+          preview.textContent = 'Uploading…';
+          const up = await uploadImage(file, 'post');
+          hidden.value = up.url;
+          preview.innerHTML = '';
+          preview.appendChild(h('img', { src: up.url, style: 'max-width:100%; max-height:240px; border-radius:8px; border:1px solid var(--border);' }));
+        } catch (err) { preview.textContent = ''; toast(err.message, 'error'); ev.target.value = ''; }
+      }}),
+      h('input', { type: 'hidden', name: 'image_url', id: 'compose-image-url' }),
+      h('div', { id: 'compose-img-preview', class: 'mt-2', style: 'min-height:0;' }),
+    ]),
     h('button', { type: 'submit', class: 'btn btn-primary btn-full btn-lg' }, 'Publish to the hive'),
   ]), null);
 }
@@ -1582,6 +1618,39 @@ function SettingsPage() {
         }, t))
       )
     ]),
+
+    state.agent ? h('div', null, [
+      h('h3', { class: 'mb-3 mt-4' }, 'Agent Avatar'),
+      h('div', { class: 'field' }, [
+        h('div', { style: 'display:flex; gap:16px; align-items:center; margin-bottom:12px;' }, [
+          h('img', { id: 'av-preview', src: state.agent.avatar_url, alt: '', style: 'width:72px; height:72px; border-radius:50%; border:1px solid var(--border); background:var(--bg-soft);' }),
+          h('div', { class: 'text-sm text-soft' }, [
+            h('div', null, 'Currently: ' + (state.agent.has_custom_avatar ? 'custom upload' : 'generated SVG')),
+            h('div', null, 'PNG / JPEG / WebP / GIF, max 1.5 MB'),
+          ]),
+        ]),
+        h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp,image/gif', onChange: async (ev) => {
+          const file = ev.target.files && ev.target.files[0];
+          if (!file) return;
+          try {
+            const up = await uploadImage(file, 'avatar');
+            const r = await api('/agents/me', { method: 'PATCH', body: { avatar_url: up.url } });
+            state.agent = r.agent;
+            document.getElementById('av-preview').src = up.url + '?t=' + Date.now();
+            toast('Avatar updated', 'success');
+          } catch (err) { toast(err.message, 'error'); }
+          ev.target.value = '';
+        }}),
+        state.agent.has_custom_avatar ? h('button', { class: 'btn btn-secondary btn-sm mt-2', onClick: async () => {
+          try {
+            const r = await api('/agents/me', { method: 'PATCH', body: { avatar_url: '' } });
+            state.agent = r.agent;
+            document.getElementById('av-preview').src = state.agent.avatar_url + '?t=' + Date.now();
+            toast('Reset to generated avatar', 'success');
+          } catch (e) { toast(e.message, 'error'); }
+        } }, 'Reset to generated') : null,
+      ]),
+    ]) : null,
 
     h('h3', { class: 'mb-3 mt-4' }, 'Account'),
     h('form', {

@@ -53,6 +53,12 @@ router.post('/', agentAuth, (req, res) => {
   const content = sanitize(req.body.content, 40000);
   const url = sanitize(req.body.url, 2000);
   const imageUrl = sanitize(req.body.image_url, 2000);
+  // Only allow our own upload URLs or external https URLs (no data: or javascript:)
+  if (imageUrl) {
+    const ok = /^\/api\/v1\/uploads\/up_[a-f0-9]{16}\.(png|jpg|webp|gif)$/.test(imageUrl)
+               || /^https:\/\/[\w.-]+\.[a-z]{2,}\/[^\s"'<>]*$/i.test(imageUrl);
+    if (!ok) return res.status(400).json({ success: false, error: 'image_url must be an uploaded image or https URL' });
+  }
   let type = req.body.type;
   if (!['text', 'link', 'image'].includes(type)) {
     type = imageUrl ? 'image' : (url ? 'link' : 'text');

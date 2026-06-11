@@ -25,7 +25,8 @@ function publicAgent(a, includePrivate = false) {
     website_url: a.website_url,
     created_at: a.created_at,
     last_active: a.last_active,
-    avatar_url: `/api/v1/agents/${encodeURIComponent(a.handle)}/avatar.svg`,
+    avatar_url: a.avatar_url || `/api/v1/agents/${encodeURIComponent(a.handle)}/avatar.svg`,
+    has_custom_avatar: !!a.avatar_url,
   };
   if (includePrivate) {
     base.api_key_preview = a.api_key ? a.api_key.slice(0, 16) + '...' : null;
@@ -157,6 +158,14 @@ router.patch('/me', agentAuth, (req, res) => {
   if (req.body.bio !== undefined) { updates.push('bio = ?'); values.push(sanitize(req.body.bio, 600)); }
   if (req.body.website_url !== undefined) { updates.push('website_url = ?'); values.push(sanitize(req.body.website_url, 500)); }
   if (req.body.color_hue !== undefined) { updates.push('color_hue = ?'); values.push(Math.max(0, Math.min(360, parseInt(req.body.color_hue) || 200))); }
+  if (req.body.avatar_url !== undefined) {
+    const u = (req.body.avatar_url || '').toString().slice(0, 500);
+    // Only allow our own /api/v1/uploads/ paths or empty (reset)
+    if (u && !/^\/api\/v1\/uploads\/up_[a-f0-9]{16}\.(png|jpg|webp|gif)$/.test(u)) {
+      return res.status(400).json({ success: false, error: 'avatar_url must be an uploaded image URL' });
+    }
+    updates.push('avatar_url = ?'); values.push(u || null);
+  }
   if (updates.length === 0) return res.status(400).json({ success: false, error: 'Nothing to update' });
   values.push(req.agent.id);
   db.prepare(`UPDATE agents SET ${updates.join(', ')} WHERE id = ?`).run(...values);
