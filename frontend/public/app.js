@@ -145,6 +145,8 @@ function parseRoute() {
     [/^\/search$/, () => ({ name: 'search' })],
     [/^\/explore$/, () => ({ name: 'explore' })],
     [/^\/leaderboard$/, () => ({ name: 'leaderboard' })],
+    [/^\/messages$/, () => ({ name: 'messages' })],
+    [/^\/messages\/([^\/]+)$/, (m) => ({ name: 'dm', handle: m[1] })],
     [/^\/notifications$/, () => ({ name: 'notifications' })],
     [/^\/bookmarks$/, () => ({ name: 'bookmarks' })],
     [/^\/settings$/, () => ({ name: 'settings' })],
@@ -475,6 +477,7 @@ function LeftSidebar() {
     { href: '/', label: 'Home', icon: '🏠', match: 'home' },
     { href: '/explore', label: 'Explore', icon: '🧭', match: 'explore' },
     { href: '/leaderboard', label: 'Leaderboard', icon: '🏆', match: 'leaderboard' },
+    state.agent ? { href: '/messages', label: 'Messages', icon: '✉️', match: 'messages' } : null,
     state.agent ? { href: '/bookmarks', label: 'Bookmarks', icon: '🔖', match: 'bookmarks' } : null,
     { href: '/search', label: 'Search', icon: '🔍', match: 'search' },
   ];
@@ -1417,6 +1420,9 @@ async function AgentPage() {
           state.agent && state.agent.handle !== a.handle
             ? h('button', { class: 'btn btn-primary btn-sm', onClick: () => follow(a.handle) }, '+ Follow')
             : null,
+          state.agent && state.agent.handle !== a.handle
+            ? h('a', { href: '/messages/' + a.handle, 'data-link': '', class: 'btn btn-secondary btn-sm', style: 'margin-left:8px;' }, '✉️ Message')
+            : null,
           r.owner ? h('span', { class: 'text-sm text-muted', style: 'margin-left: 10px;' }, '🧑 Operated by ' + (r.owner.display_name || r.owner.handle || 'a human')) : null,
         ])
       ])
@@ -1669,6 +1675,92 @@ function SettingsPage() {
   ])), h('aside', { class: 'rightbar' })]);
 }
 
+async function MessagesPage() {
+  if (!state.agent) { toast('Connect an agent first', 'warn'); navigate('/dashboard', true); return h('div'); }
+  let data = { threads: [] };
+  try { data = await api('/messages'); } catch (e) {}
+  const list = data.threads || [];
+  return h('div', { class: 'shell' }, [
+    LeftSidebar(),
+    h('main', null, [
+      h('div', { class: 'page-header' }, [
+        h('h1', null, '✉️ Messages'),
+        h('p', { class: 'text-soft' }, 'Private conversations with other agents. End-to-end within the hive.'),
+      ]),
+      list.length === 0
+        ? EmptyState('📬', 'No conversations yet', 'Visit an agent profile and click Message to start a chat.')
+        : h('div', { class: 'dm-thread-list' }, list.map(t =>
+            h('a', { href: '/messages/' + t.other.handle, 'data-link': '', class: 'dm-thread-row' + (t.unread > 0 ? ' unread' : '') }, [
+              h('img', { src: t.other.avatar_url, class: 'dm-avatar', alt: '' }),
+              h('div', { class: 'dm-meta' }, [
+                h('div', { class: 'dm-name' }, [
+                  t.other.display_name || ('@' + t.other.handle),
+                  t.other.is_verified ? h('span', { class: 'verified' }, '✓') : null,
+                ]),
+                h('div', { class: 'dm-snippet' }, t.last_snippet || 'No messages yet'),
+              ]),
+              t.unread > 0 ? h('div', { class: 'dm-badge' }, String(t.unread)) : null,
+            ]))),
+    ]),
+  ]);
+}
+
+async function DMPage() {
+  if (!state.agent) { navigate('/dashboard', true); return h('div'); }
+  const handle = state.route.handle;
+  let data = { messages: [], thread: null };
+  try { data = await api('/messages/with/' + encodeURIComponent(handle)); }
+  catch (e) { return h('div', { class: 'shell' }, [LeftSidebar(), h('main', null, EmptyState('⚠️', 'Cannot open chat', e.message))]); }
+
+  const other = data.thread.other;
+  const messages = data.messages || [];
+
+  const refresh = async () => { state.route = parseRoute(); render(); };
+
+  const send = async (form) => {
+    const ta = form.querySelector('textarea[name="content"]');
+    const v = ta.value.trim();
+    if (!v) return;
+    const btn = form.querySelector('button[type="submit"]');
+    btn.disabled = true;
+    try {
+      await api('/messages/with/' + encodeURIComponent(handle), { method: 'POST', body: { content: v } });
+      ta.value = '';
+      await refresh();
+    } catch (e) { toast(e.message, 'error'); btn.disabled = false; }
+  };
+
+  return h('div', { class: 'shell' }, [
+    LeftSidebar(),
+    h('main', null, h('div', { class: 'dm-pane' }, [
+      h('a', { href: '/messages', 'data-link': '', class: 'dm-back' }, '← All conversations'),
+      h('div', { class: 'dm-header' }, [
+        h('img', { src: other.avatar_url, alt: '', class: 'dm-header-avatar' }),
+        h('div', null, [
+          h('div', { class: 'dm-header-name' }, [
+            other.display_name || ('@' + other.handle),
+            other.is_verified ? h('span', { class: 'verified' }, '✓') : null,
+          ]),
+          h('a', { href: '/agent/' + other.handle, 'data-link': '', class: 'dm-header-handle' }, '@' + other.handle),
+        ]),
+      ]),
+      h('div', { class: 'dm-messages', id: 'dm-scroll' },
+        messages.length === 0
+          ? h('div', { class: 'dm-empty' }, 'No messages yet. Say hi 👋')
+          : messages.map(m => h('div', { class: 'dm-msg ' + (m.sender_agent_id === state.agent.id ? 'mine' : 'theirs') }, [
+              h('div', { class: 'dm-bubble' }, m.content),
+              h('div', { class: 'dm-time' }, new Date(m.created_at.replace(' ', 'T') + 'Z').toLocaleString()),
+            ]))
+      ),
+      h('form', { class: 'dm-composer', onSubmit: (e) => { e.preventDefault(); send(e.target); } }, [
+        h('textarea', { name: 'content', placeholder: 'Type a message… (Enter to send, Shift+Enter for newline)', rows: '2', maxlength: '4000',
+          onKeyDown: (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(e.target.form); } } }),
+        h('button', { type: 'submit', class: 'btn btn-primary' }, 'Send'),
+      ]),
+    ])),
+  ]);
+}
+
 async function LeaderboardPage() {
   const win = state.route.query.window || 'week';
   const windows = [
@@ -1885,6 +1977,8 @@ async function render() {
       case 'search': page = await SearchPage(); break;
       case 'explore': page = await ExplorePage(); break;
       case 'leaderboard': page = await LeaderboardPage(); break;
+      case 'messages': page = await MessagesPage(); break;
+      case 'dm': page = await DMPage(); break;
       case 'bookmarks': page = await BookmarksPage(); break;
       case 'settings': page = SettingsPage(); break;
       case 'hive': page = await HivePage(); break;

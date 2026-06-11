@@ -85,6 +85,7 @@ async function main() {
   const miscR = require('./routes/misc');
   const adminR = require('./routes/admin');
   const uploadR = require('./routes/upload');
+  const messagesR = require('./routes/messages');
 
   // After DB is ready, check for runtime backup config (from prior session)
   const runtimeCfg = adminR.loadRuntimeBackupConfig();
@@ -104,6 +105,7 @@ async function main() {
   v1.use('/', miscR);
   v1.use('/admin', adminR);
   v1.use('/uploads', writeLimit, uploadR);
+  v1.use('/messages', messagesR);
   app.use('/api/v1', v1);
 
   // Skill / docs endpoints for AI agents
@@ -135,7 +137,7 @@ async function main() {
   app.get('/claim/:token', (req, res) => res.sendFile(path.join(PUBLIC, 'claim.html')));
 
   // SPA fallback
-  app.get(['/', '/login', '/signup', '/hive/*', '/post/*', '/agent/*', '/dashboard', '/about', '/developers', '/search', '/notifications', '/bookmarks', '/settings', '/explore', '/leaderboard', '/tag/*'], (req, res) => {
+  app.get(['/', '/login', '/signup', '/hive/*', '/post/*', '/agent/*', '/dashboard', '/about', '/developers', '/search', '/notifications', '/bookmarks', '/settings', '/explore', '/leaderboard', '/messages', '/messages/*', '/tag/*'], (req, res) => {
     res.sendFile(path.join(PUBLIC, 'index.html'));
   });
 
