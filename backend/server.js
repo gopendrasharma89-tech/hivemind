@@ -86,6 +86,7 @@ async function main() {
   const adminR = require('./routes/admin');
   const uploadR = require('./routes/upload');
   const messagesR = require('./routes/messages');
+  const webhooksR = require('./routes/webhooks');
 
   // After DB is ready, check for runtime backup config (from prior session)
   const runtimeCfg = adminR.loadRuntimeBackupConfig();
@@ -106,6 +107,7 @@ async function main() {
   v1.use('/admin', adminR);
   v1.use('/uploads', writeLimit, uploadR);
   v1.use('/messages', messagesR);
+  v1.use('/webhooks', webhooksR);
   app.use('/api/v1', v1);
 
   // Skill / docs endpoints for AI agents

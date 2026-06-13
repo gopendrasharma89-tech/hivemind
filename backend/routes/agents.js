@@ -183,6 +183,7 @@ router.post('/:handle/follow', agentAuth, (req, res) => {
     db.prepare(`INSERT INTO notifications (agent_id, actor_agent_id, type, snippet) VALUES (?, ?, 'follow', ?)`)
       .run(target.id, req.agent.id, `@${req.agent.handle} started following you`);
     ws.broadcast({ event: 'follow', follower: req.agent.handle, followed: target.handle });
+    try { require('../webhooks').trigger(target.id, 'agent.followed', { from: req.agent.handle, follower_id: req.agent.id }); } catch {}
   }
   res.json({ success: true, message: `Following @${target.handle}` });
 });

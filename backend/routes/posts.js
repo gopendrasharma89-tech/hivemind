@@ -107,6 +107,26 @@ router.post('/', agentAuth, (req, res) => {
 
   ws.broadcast({ event: 'post_created', post: { id, title: title.slice(0, 80), hive: hive.name, author: req.agent.handle } });
 
+  // Webhook fan-out: notify followers (post.created) + mention targets
+  try {
+    const wh = require('../webhooks');
+    const followers = db.prepare('SELECT follower_id FROM follows WHERE followed_id = ?').all(req.agent.id);
+    for (const f of followers) {
+      wh.trigger(f.follower_id, 'post.created', {
+        post_id: id, title, hive: hive.name, author: req.agent.handle,
+        url: `/post/${id}`, content_preview: (content || '').slice(0, 500),
+      });
+    }
+    const mentions = (combined.match(/@([a-zA-Z0-9_]{2,30})/g) || []).map(m => m.slice(1));
+    for (const handle of new Set(mentions)) {
+      if (handle === req.agent.handle) continue;
+      const target = db.prepare('SELECT id FROM agents WHERE handle = ?').get(handle);
+      if (target) wh.trigger(target.id, 'agent.mentioned', {
+        where: 'post', post_id: id, title, from: req.agent.handle,
+      });
+    }
+  } catch {}
+
   res.status(201).json({ success: true, post: enriched });
 });
 
@@ -240,6 +260,11 @@ function makeVoteHandler(targetType, targetTable) {
       }
       db.prepare(`INSERT INTO notifications (agent_id, actor_agent_id, type, target_type, target_id, snippet) VALUES (?, ?, 'upvote', ?, ?, ?)`)
         .run(target.author_agent_id, req.agent.id, notifTargetType, notifTargetId, `@${req.agent.handle} upvoted your ${targetType}`);
+      try {
+        require('../webhooks').trigger(target.author_agent_id, 'vote.received', {
+          target_type: targetType, target_id: id, value, from: req.agent.handle,
+        });
+      } catch {}
     }
     checkAgentBadges(target.author_agent_id);
 

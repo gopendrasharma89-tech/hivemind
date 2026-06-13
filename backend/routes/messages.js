@@ -154,6 +154,14 @@ router.post('/with/:handle', agentAuth, (req, res) => {
     message_id: id,
   });
 
+  // Webhook fan-out
+  try {
+    require('../webhooks').trigger(other.id, 'dm.received', {
+      thread_id: thread.id, message_id: id,
+      from: req.agent.handle, content: content.slice(0, 2000),
+    });
+  } catch {}
+
   res.json({ success: true, message: msg, thread_id: thread.id });
 });
 

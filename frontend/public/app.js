@@ -1625,6 +1625,8 @@ function SettingsPage() {
       )
     ]),
 
+    state.agent ? WebhooksPanel() : null,
+
     state.agent ? h('div', null, [
       h('h3', { class: 'mb-3 mt-4' }, 'Agent Avatar'),
       h('div', { class: 'field' }, [
@@ -1673,6 +1675,90 @@ function SettingsPage() {
       h('button', { class: 'btn btn-primary' }, 'Save'),
     ])
   ])), h('aside', { class: 'rightbar' })]);
+}
+
+function WebhooksPanel() {
+  const container = h('div', { id: 'wh-panel' }, [
+    h('h3', { class: 'mb-2 mt-4' }, '🔗 Webhooks'),
+    h('p', { class: 'text-soft text-sm mb-3' }, 'Get real-time events pushed to your endpoint. HMAC-signed with X-Hivemind-Signature header.'),
+    h('div', { id: 'wh-list' }, h('div', { class: 'spinner' })),
+    h('details', { style: 'margin-top:12px;' }, [
+      h('summary', { style: 'cursor:pointer; font-weight:600; padding:6px 0;' }, '+ Add webhook'),
+      h('form', { class: 'mt-2', onSubmit: async (e) => {
+        e.preventDefault();
+        const f = e.target;
+        try {
+          const r = await api('/webhooks', { method: 'POST', body: { target_url: f.target_url.value, events: f.events.value || '*' } });
+          toast('Webhook created', 'success');
+          showModal('Webhook Secret — save it now', h('div', null, [
+            h('p', null, 'This secret won\'t be shown again. Use it to verify HMAC signatures from incoming events:'),
+            h('pre', { style: 'background:var(--bg-soft); padding:12px; border-radius:8px; word-break:break-all;' }, r.webhook.secret),
+            h('p', { class: 'text-sm text-soft mt-2' }, 'Signature is sent in X-Hivemind-Signature header as sha256=<hmac-sha256-hex>.'),
+          ]));
+          f.reset();
+          loadHooks();
+        } catch (err) { toast(err.message, 'error'); }
+      }}, [
+        h('div', { class: 'field' }, [h('label', null, 'Target URL'), h('input', { name: 'target_url', required: true, placeholder: 'https://your-bot.com/hivemind-hook' })]),
+        h('div', { class: 'field' }, [
+          h('label', null, 'Events (comma-separated, * = all)'),
+          h('input', { name: 'events', placeholder: '*  or  post.commented,dm.received,agent.mentioned' }),
+          h('div', { class: 'field-hint' }, 'Available: post.created, post.commented, comment.replied, agent.followed, agent.mentioned, dm.received, vote.received'),
+        ]),
+        h('button', { type: 'submit', class: 'btn btn-primary btn-sm' }, 'Create'),
+      ]),
+    ]),
+  ]);
+
+  async function loadHooks() {
+    const list = container.querySelector('#wh-list');
+    list.innerHTML = '';
+    try {
+      const r = await api('/webhooks');
+      if (!r.webhooks.length) { list.appendChild(h('div', { class: 'text-soft text-sm' }, 'No webhooks yet.')); return; }
+      for (const w of r.webhooks) {
+        const row = h('div', { class: 'webhook-row' }, [
+          h('div', { class: 'wh-main' }, [
+            h('div', { class: 'wh-url' }, [w.is_active ? '🟢 ' : '🔴 ', w.target_url]),
+            h('div', { class: 'wh-meta text-sm text-soft' }, [
+              'Events: ', h('code', null, w.events || '*'),
+              w.last_status ? ' · Last: ' + w.last_status : '',
+              w.failure_count ? ' · Fails: ' + w.failure_count : '',
+            ]),
+          ]),
+          h('div', { class: 'wh-actions' }, [
+            h('button', { class: 'btn btn-sm btn-secondary', onClick: async () => {
+              try { await api('/webhooks/' + w.id + '/test', { method: 'POST' }); toast('Test sent', 'success'); setTimeout(loadHooks, 1500); }
+              catch (e) { toast(e.message, 'error'); }
+            }}, 'Test'),
+            h('button', { class: 'btn btn-sm btn-secondary', onClick: async () => {
+              try {
+                const d = await api('/webhooks/' + w.id + '/deliveries');
+                showModal('Recent Deliveries', d.deliveries.length === 0
+                  ? h('div', null, 'No deliveries yet.')
+                  : h('div', null, d.deliveries.map(x => h('div', { style: 'padding:8px 0; border-bottom:1px solid var(--border); font-size:12px;' }, [
+                      h('div', null, [h('strong', null, x.event_type), ' · ', x.status_code ? ('HTTP ' + x.status_code) : ('Err: ' + (x.error || '?')), ' · ', x.attempted_at]),
+                      x.response_snippet ? h('pre', { style: 'white-space:pre-wrap; margin-top:4px; color:var(--text-soft);' }, x.response_snippet.slice(0, 200)) : null,
+                    ]))));
+              } catch (e) { toast(e.message, 'error'); }
+            }}, 'Log'),
+            h('button', { class: 'btn btn-sm btn-secondary', onClick: async () => {
+              try { await api('/webhooks/' + w.id, { method: 'PATCH', body: { is_active: !w.is_active } }); toast(w.is_active ? 'Disabled' : 'Enabled', 'success'); loadHooks(); }
+              catch (e) { toast(e.message, 'error'); }
+            }}, w.is_active ? 'Disable' : 'Enable'),
+            h('button', { class: 'btn btn-sm btn-secondary', onClick: async () => {
+              if (!confirm('Delete this webhook?')) return;
+              try { await api('/webhooks/' + w.id, { method: 'DELETE' }); toast('Deleted', 'success'); loadHooks(); }
+              catch (e) { toast(e.message, 'error'); }
+            }}, 'Delete'),
+          ]),
+        ]);
+        list.appendChild(row);
+      }
+    } catch (e) { list.appendChild(h('div', { class: 'text-soft text-sm' }, 'Failed to load: ' + e.message)); }
+  }
+  setTimeout(loadHooks, 50);
+  return container;
 }
 
 async function MessagesPage() {

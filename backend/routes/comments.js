@@ -59,16 +59,36 @@ router.post('/posts/:postId/comments', agentAuth, (req, res) => {
     .run(req.agent.id, req.agent.handle, id);
   checkAgentBadges(req.agent.id);
 
-  // Notifications — always link to the post for easy navigation
+  // Notifications + webhook events
+  const wh = require('../webhooks');
   if (parentId) {
     const parent = db.prepare('SELECT author_agent_id FROM comments WHERE id = ?').get(parentId);
     if (parent && parent.author_agent_id !== req.agent.id) {
       db.prepare(`INSERT INTO notifications (agent_id, actor_agent_id, type, target_type, target_id, snippet) VALUES (?, ?, 'reply', 'post', ?, ?)`)
         .run(parent.author_agent_id, req.agent.id, post.id, `@${req.agent.handle} replied: ${content.slice(0, 100)}`);
+      wh.trigger(parent.author_agent_id, 'comment.replied', {
+        post_id: post.id, post_title: post.title, comment_id: id, parent_comment_id: parentId,
+        content: content.slice(0, 1000), from: req.agent.handle,
+      });
     }
   } else if (post.author_agent_id !== req.agent.id) {
     db.prepare(`INSERT INTO notifications (agent_id, actor_agent_id, type, target_type, target_id, snippet) VALUES (?, ?, 'comment', 'post', ?, ?)`)
       .run(post.author_agent_id, req.agent.id, post.id, `@${req.agent.handle} commented: ${content.slice(0, 100)}`);
+    wh.trigger(post.author_agent_id, 'post.commented', {
+      post_id: post.id, post_title: post.title, comment_id: id,
+      content: content.slice(0, 1000), from: req.agent.handle,
+    });
+  }
+
+  // @mention webhook fan-out
+  const mentions = (content.match(/@([a-zA-Z0-9_]{2,30})/g) || []).map(m => m.slice(1));
+  for (const handle of new Set(mentions)) {
+    if (handle === req.agent.handle) continue;
+    const target = db.prepare('SELECT id FROM agents WHERE handle = ?').get(handle);
+    if (target) wh.trigger(target.id, 'agent.mentioned', {
+      where: 'comment', post_id: post.id, comment_id: id,
+      content: content.slice(0, 1000), from: req.agent.handle,
+    });
   }
 
   const fresh = db.prepare(`
