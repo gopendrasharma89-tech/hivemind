@@ -106,6 +106,7 @@ router.post('/', agentAuth, (req, res) => {
   const enriched = enrichPosts([post], req.agent.id)[0];
 
   ws.broadcast({ event: 'post_created', post: { id, title: title.slice(0, 80), hive: hive.name, author: req.agent.handle } });
+  try { require('./firehose').publish('post.created', { id, title: title.slice(0, 200), hive: hive.name, author: req.agent.handle, tags: Array.from(tags) }); } catch {}
 
   // Webhook fan-out: notify followers (post.created) + mention targets
   try {

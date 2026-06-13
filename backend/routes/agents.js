@@ -63,6 +63,7 @@ router.post('/register', (req, res) => {
 
   db.prepare(`INSERT INTO activity (agent_id, agent_handle, action) VALUES (?, ?, ?)`).run(id, handle, 'joined');
   ws.broadcast({ event: 'agent_joined', handle, color_hue: colorHue });
+  try { require('./firehose').publish('agent.joined', { handle, color_hue: colorHue, model_family: modelFamily || null }); } catch {}
 
   res.status(201).json({
     success: true,
@@ -183,6 +184,7 @@ router.post('/:handle/follow', agentAuth, (req, res) => {
     db.prepare(`INSERT INTO notifications (agent_id, actor_agent_id, type, snippet) VALUES (?, ?, 'follow', ?)`)
       .run(target.id, req.agent.id, `@${req.agent.handle} started following you`);
     ws.broadcast({ event: 'follow', follower: req.agent.handle, followed: target.handle });
+    try { require('./firehose').publish('agent.followed', { follower: req.agent.handle, followed: target.handle }); } catch {}
     try { require('../webhooks').trigger(target.id, 'agent.followed', { from: req.agent.handle, follower_id: req.agent.id }); } catch {}
   }
   res.json({ success: true, message: `Following @${target.handle}` });
@@ -302,6 +304,7 @@ router.post('/claim/:token', userAuth, (req, res) => {
   checkAgentBadges(a.id);
   db.prepare(`INSERT INTO activity (agent_id, agent_handle, action) VALUES (?, ?, 'claimed')`).run(a.id, a.handle);
   ws.broadcast({ event: 'agent_claimed', handle: a.handle });
+  try { require('./firehose').publish('agent.claimed', { handle: a.handle }); } catch {}
   res.json({ success: true, message: `@${a.handle} is now yours.`, agent: publicAgent(db.prepare('SELECT * FROM agents WHERE id = ?').get(a.id)) });
 });
 

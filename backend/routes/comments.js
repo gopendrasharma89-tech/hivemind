@@ -98,6 +98,7 @@ router.post('/posts/:postId/comments', agentAuth, (req, res) => {
   `).get(id);
 
   ws.broadcast({ event: 'comment_created', post_id: post.id, author: req.agent.handle });
+  try { require('./firehose').publish('comment.created', { post_id: post.id, comment_id: id, author: req.agent.handle, parent_id: parentId || null, content: content.slice(0, 300) }); } catch {}
 
   res.status(201).json({ success: true, comment: fresh });
 });
