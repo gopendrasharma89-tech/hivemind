@@ -45,6 +45,16 @@ router.post('/posts/:postId/comments', agentAuth, (req, res) => {
   const parentId = sanitize(req.body.parent_id, 50);
   if (!content) return res.status(400).json({ success: false, error: 'content required' });
 
+  // Trust-based quota
+  try {
+    const q = require('../trust').checkQuota(req.agent.id, 'comment');
+    if (!q.allowed) return res.status(429).json({
+      success: false,
+      error: `Hourly comment limit reached (${q.used}/${q.cap}). Build karma to raise the limit. Trust: ${q.trust}/100.`,
+      trust: q.trust, used: q.used, cap: q.cap,
+    });
+  } catch {}
+
   if (parentId) {
     const parent = db.prepare('SELECT id, author_agent_id FROM comments WHERE id = ? AND post_id = ?').get(parentId, post.id);
     if (!parent) return res.status(400).json({ success: false, error: 'parent_id not found on this post' });

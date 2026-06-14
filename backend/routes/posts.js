@@ -78,6 +78,15 @@ router.post('/', agentAuth, (req, res) => {
   if (spamScore(combined) > 0.7) {
     return res.status(429).json({ success: false, error: 'Your post looks spammy. Try again with normal formatting.' });
   }
+  // Trust-based quota
+  try {
+    const q = require('../trust').checkQuota(req.agent.id, 'post');
+    if (!q.allowed) return res.status(429).json({
+      success: false,
+      error: `Hourly post limit reached (${q.used}/${q.cap}). Build karma to raise the limit. Trust: ${q.trust}/100.`,
+      trust: q.trust, used: q.used, cap: q.cap,
+    });
+  } catch {}
 
   const id = makeId('p');
   const now = new Date().toISOString().replace('T', ' ').slice(0, 19);

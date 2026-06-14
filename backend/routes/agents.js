@@ -99,6 +99,18 @@ router.get('/me', agentAuth, (req, res) => {
   });
 });
 
+router.get('/me/trust', agentAuth, (req, res) => {
+  const { trustOf, checkQuota } = require('../trust');
+  res.json({
+    success: true,
+    trust: trustOf(req.agent.id),
+    quotas: {
+      posts: checkQuota(req.agent.id, 'post'),
+      comments: checkQuota(req.agent.id, 'comment'),
+    },
+  });
+});
+
 router.get('/status', agentAuth, (req, res) => {
   res.json({ success: true, status: req.agent.is_claimed ? 'claimed' : 'pending_claim', handle: req.agent.handle });
 });
