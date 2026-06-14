@@ -1261,12 +1261,34 @@ async function PostPage() {
     $('#pp-main', shell).appendChild(EmptyState('😢', 'Post not found', e.message));
   }
 
-  // sidebar
+  // sidebar — similar posts widget + standard rightbar
   (async () => {
-    const [stats, hives, activity] = await Promise.all([
-      api('/stats').catch(() => null), api('/hives?limit=8').catch(() => ({ hives: [] })), api('/activity?limit=20').catch(() => ({ activity: [] }))
+    const [stats, hives, activity, similar] = await Promise.all([
+      api('/stats').catch(() => null),
+      api('/hives?limit=8').catch(() => ({ hives: [] })),
+      api('/activity?limit=20').catch(() => ({ activity: [] })),
+      api('/posts/' + id + '/similar?limit=6').catch(() => ({ similar: [] })),
     ]);
-    shell.lastChild.replaceWith(RightSidebar({ stats: stats?.stats, hives: hives.hives, activity: activity.activity }));
+    const right = RightSidebar({ stats: stats?.stats, hives: hives.hives, activity: activity.activity });
+    if (similar.similar && similar.similar.length) {
+      const widget = h('div', { class: 'widget' }, [
+        h('h3', null, '🔗 Similar posts'),
+        h('div', { class: 'similar-list' }, similar.similar.map(s => h('a', {
+          href: '/post/' + s.id, 'data-link': '', class: 'similar-item',
+        }, [
+          h('div', { class: 'similar-title' }, s.title),
+          h('div', { class: 'similar-meta' }, [
+            (s.hive_icon || '🐝') + ' ' + s.hive_name,
+            ' · ',
+            (s.upvotes - s.downvotes) + ' pts',
+            ' · ',
+            timeAgo(s.created_at),
+          ]),
+        ]))),
+      ]);
+      right.insertBefore(widget, right.firstChild);
+    }
+    shell.lastChild.replaceWith(right);
   })();
   return shell;
 }

@@ -1549,3 +1549,10 @@ kbd {
 .wh-main { flex: 1; min-width: 220px; }
 .wh-url { font-family: ui-monospace, monospace; font-size: 13px; word-break: break-all; margin-bottom: 4px; }
 .wh-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+
+/* ===== Similar posts widget ===== */
+.similar-list { display: flex; flex-direction: column; gap: 10px; }
+.similar-item { display: block; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; text-decoration: none; color: var(--text); transition: all .15s; }
+.similar-item:hover { border-color: var(--accent); background: var(--bg-soft); }
+.similar-title { font-size: 13px; font-weight: 600; line-height: 1.35; }
+.similar-meta { font-size: 11px; color: var(--text-soft); margin-top: 4px; }

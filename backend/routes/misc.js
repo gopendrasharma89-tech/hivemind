@@ -116,6 +116,53 @@ router.get('/search', optionalAgentAuth, (req, res) => {
   res.json({ success: true, query: q, type, results: results.slice(0, limit), count: Math.min(results.length, limit) });
 });
 
+// Similar posts — TF-IDF-lite cosine similarity over titles + tags
+const STOPWORDS = new Set(['the','a','an','is','it','to','of','for','in','on','at','and','or','but','this','that','with','from','by','as','are','was','were','be','i','you','we','they','my','our','your','their','its','if','so','not','no','do','did','have','has','had','will','would','can','could','should','what','which','who','when','where','why','how','about','just','than','then','also','very','more','some','any','out','up','down','off']);
+function tokenize(s) {
+  if (!s) return [];
+  return s.toLowerCase().replace(/[^a-z0-9#\s]/g, ' ').split(/\s+/).filter(t => t.length >= 2 && !STOPWORDS.has(t));
+}
+function tf(tokens) {
+  const m = new Map();
+  for (const t of tokens) m.set(t, (m.get(t) || 0) + 1);
+  return m;
+}
+function cosine(a, b) {
+  let dot = 0, na = 0, nb = 0;
+  for (const [t, w] of a) { na += w * w; if (b.has(t)) dot += w * b.get(t); }
+  for (const [, w] of b) nb += w * w;
+  if (na === 0 || nb === 0) return 0;
+  return dot / (Math.sqrt(na) * Math.sqrt(nb));
+}
+router.get('/posts/:id/similar', (req, res) => {
+  const seed = db.prepare(`${POST_SELECT} WHERE p.id = ?`).get(req.params.id);
+  if (!seed) return res.status(404).json({ success: false, error: 'Post not found' });
+  const seedTokens = tokenize((seed.title || '') + ' ' + (seed.content || '').slice(0, 1000));
+  const seedTags = db.prepare('SELECT tag FROM post_tags WHERE post_id = ?').all(seed.id).map(r => r.tag);
+  for (const t of seedTags) seedTokens.push('#' + t);
+  const seedVec = tf(seedTokens);
+  if (seedVec.size === 0) return res.json({ success: true, similar: [] });
+
+  const candidates = db.prepare(`${POST_SELECT} WHERE p.is_removed = 0 AND p.id != ? ORDER BY p.created_at DESC LIMIT 800`).all(seed.id);
+  const scored = [];
+  for (const c of candidates) {
+    const tokens = tokenize((c.title || '') + ' ' + (c.content || '').slice(0, 1000));
+    const tags = db.prepare('SELECT tag FROM post_tags WHERE post_id = ?').all(c.id).map(r => r.tag);
+    for (const t of tags) tokens.push('#' + t);
+    const sim = cosine(seedVec, tf(tokens));
+    if (sim > 0.08) scored.push({ post: c, sim });
+  }
+  scored.sort((a, b) => b.sim - a.sim);
+  const top = scored.slice(0, Math.min(parseInt(req.query.limit) || 6, 20)).map(({ post: p, sim }) => ({
+    id: p.id, title: p.title, similarity: parseFloat(sim.toFixed(3)),
+    upvotes: p.upvotes, downvotes: p.downvotes, comment_count: p.comment_count,
+    created_at: p.created_at,
+    hive_name: p.hive_name, hive_icon: p.hive_icon,
+    author_handle: p.author_handle, author_color_hue: p.author_color_hue,
+  }));
+  res.json({ success: true, similar: top });
+});
+
 // Trending tags
 router.get('/trending/tags', (req, res) => {
   const limit = Math.min(parseInt(req.query.limit) || 15, 50);
