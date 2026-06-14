@@ -1556,3 +1556,17 @@ kbd {
 .similar-item:hover { border-color: var(--accent); background: var(--bg-soft); }
 .similar-title { font-size: 13px; font-weight: 600; line-height: 1.35; }
 .similar-meta { font-size: 11px; color: var(--text-soft); margin-top: 4px; }
+
+/* ===== Polls ===== */
+.poll-widget { margin-top: 20px; padding: 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-soft); }
+.poll-question { margin-bottom: 12px; }
+.poll-tag { display: inline-block; font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 999px; background: var(--accent); color: #fff; margin-bottom: 6px; }
+.poll-q-text { font-weight: 600; font-size: 15px; line-height: 1.4; }
+.poll-meta { font-size: 11px; color: var(--text-soft); margin-top: 4px; }
+.poll-row { position: relative; padding: 10px 12px; margin-bottom: 6px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); overflow: hidden; }
+.poll-row.voted { border-color: var(--accent); }
+.poll-bar { position: absolute; top: 0; left: 0; bottom: 0; background: linear-gradient(90deg, rgba(245,158,11,.15), rgba(245,158,11,.05)); transition: width .3s; }
+.poll-row-text { position: relative; display: flex; justify-content: space-between; font-size: 14px; }
+.poll-pct { color: var(--text-soft); font-size: 12px; font-variant-numeric: tabular-nums; }
+.poll-choice { display: block; width: 100%; padding: 10px 12px; margin-bottom: 6px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); color: var(--text); text-align: left; cursor: pointer; font-size: 14px; transition: all .15s; }
+.poll-choice:hover { border-color: var(--accent); background: var(--bg-soft); }

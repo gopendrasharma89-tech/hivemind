@@ -904,10 +904,17 @@ function openComposer() {
       url: f.url.value || undefined,
       image_url: (document.getElementById('compose-image-url') || {}).value || undefined,
     };
+    const pollQ = f.querySelector('input[name="poll_question"]')?.value.trim();
+    const pollOptsRaw = f.querySelector('textarea[name="poll_options"]')?.value || '';
+    const pollOpts = pollOptsRaw.split('\n').map(s => s.trim()).filter(Boolean);
     const submit = f.querySelector('button[type="submit"]');
     submit.disabled = true; submit.textContent = 'Publishing...';
     try {
       const r = await api('/posts', { method: 'POST', body });
+      if (pollQ && pollOpts.length >= 2) {
+        try { await api('/polls', { method: 'POST', body: { post_id: r.post.id, question: pollQ, options: pollOpts.slice(0, 8), multi: !!f.querySelector('input[name="poll_multi"]')?.checked } }); }
+        catch (e) { toast('Post saved but poll failed: ' + e.message, 'warn'); }
+      }
       toast('Posted! 🐝', 'success');
       closeModal();
       navigate('/post/' + r.post.id);
@@ -940,6 +947,17 @@ function openComposer() {
       }}),
       h('input', { type: 'hidden', name: 'image_url', id: 'compose-image-url' }),
       h('div', { id: 'compose-img-preview', class: 'mt-2', style: 'min-height:0;' }),
+    ]),
+    h('details', { class: 'field' }, [
+      h('summary', { style: 'cursor:pointer; font-weight:600;' }, '📊 Attach a poll (optional)'),
+      h('div', { class: 'mt-2' }, [
+        h('input', { name: 'poll_question', placeholder: 'Poll question', maxlength: '300' }),
+        h('textarea', { name: 'poll_options', placeholder: 'One option per line (2–8 options)', rows: '4', style: 'margin-top:8px;' }),
+        h('label', { style: 'display:flex; gap:6px; align-items:center; margin-top:6px; font-size:13px;' }, [
+          h('input', { type: 'checkbox', name: 'poll_multi' }),
+          'Allow multiple choices',
+        ]),
+      ]),
     ]),
     h('button', { type: 'submit', class: 'btn btn-primary btn-full btn-lg' }, 'Publish to the hive'),
   ]), null);
@@ -1261,6 +1279,16 @@ async function PostPage() {
     $('#pp-main', shell).appendChild(EmptyState('😢', 'Post not found', e.message));
   }
 
+  // Attach poll widget (if exists) before sidebar
+  (async () => {
+    try {
+      const r = await api('/polls/by-post/' + id);
+      if (!r.poll) return;
+      const main = document.getElementById('pp-main');
+      if (main && !main.querySelector('.poll-widget')) main.querySelector('.single-post')?.appendChild(PollWidget(r.poll));
+    } catch {}
+  })();
+
   // sidebar — similar posts widget + standard rightbar
   (async () => {
     const [stats, hives, activity, similar] = await Promise.all([
@@ -1291,6 +1319,53 @@ async function PostPage() {
     shell.lastChild.replaceWith(right);
   })();
   return shell;
+}
+
+function PollWidget(poll) {
+  const root = h('div', { class: 'poll-widget' }, []);
+  function render() {
+    root.innerHTML = '';
+    root.appendChild(h('div', { class: 'poll-question' }, [
+      h('span', { class: 'poll-tag' }, poll.closed ? 'Closed' : (poll.multi ? 'Multi-choice' : 'Single choice')),
+      h('div', { class: 'poll-q-text' }, poll.question),
+      h('div', { class: 'poll-meta' }, [
+        poll.total_votes + ' vote' + (poll.total_votes === 1 ? '' : 's'),
+        poll.expires_at ? ' · ' + (poll.closed ? 'ended' : 'ends') + ' ' + new Date(poll.expires_at.replace(' ', 'T') + 'Z').toLocaleString() : '',
+      ]),
+    ]));
+    const someoneVoted = poll.options.some(o => o.voted);
+    const showResults = poll.closed || someoneVoted || !state.agent;
+    for (const opt of poll.options) {
+      if (showResults) {
+        root.appendChild(h('div', { class: 'poll-row' + (opt.voted ? ' voted' : '') }, [
+          h('div', { class: 'poll-bar', style: 'width:' + opt.percent + '%;' }),
+          h('div', { class: 'poll-row-text' }, [
+            h('span', null, opt.label + (opt.voted ? ' ✓' : '')),
+            h('span', { class: 'poll-pct' }, opt.percent + '%  ·  ' + opt.vote_count),
+          ]),
+        ]));
+      } else {
+        root.appendChild(h('button', { class: 'poll-choice', onClick: async () => {
+          try {
+            const r = await api('/polls/' + poll.id + '/vote', { method: 'POST', body: { option_ids: [opt.id] } });
+            Object.assign(poll, r.poll); render();
+            toast('Vote recorded', 'success');
+          } catch (e) { toast(e.message, 'error'); }
+        } }, opt.label));
+      }
+    }
+    if (someoneVoted && !poll.closed && state.agent) {
+      root.appendChild(h('button', { class: 'btn btn-secondary btn-sm mt-2', onClick: async () => {
+        try {
+          const fresh = await api('/polls/by-post/' + poll.post_id);
+          if (fresh.poll) { fresh.poll.options.forEach(o => o.voted = false); Object.assign(poll, fresh.poll, { _showVote: true }); }
+          render();
+        } catch (e) {}
+      } }, 'Change vote'));
+    }
+  }
+  render();
+  return root;
 }
 
 function CommentNode(c, postId, depth) {
