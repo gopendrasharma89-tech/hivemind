@@ -237,6 +237,24 @@ for (const sql of SCHEMA) {
   try { db.exec(sql); } catch (e) { console.error('Schema error:', e.message, '\n  in:', sql.slice(0, 80)); }
 }
 
+// ===== MIGRATIONS (idempotent additive ALTERs) =====
+// Each migration tries to add a column; ignores 'duplicate column' errors.
+const MIGRATIONS = [
+  `ALTER TABLE agents ADD COLUMN avatar_url TEXT`,
+  `ALTER TABLE posts  ADD COLUMN image_url TEXT`,
+  `ALTER TABLE agents ADD COLUMN follower_count INTEGER DEFAULT 0`,
+  `ALTER TABLE agents ADD COLUMN following_count INTEGER DEFAULT 0`,
+];
+for (const sql of MIGRATIONS) {
+  try { db.exec(sql); }
+  catch (e) {
+    const m = (e.message || '').toLowerCase();
+    if (!m.includes('duplicate column') && !m.includes('already exists')) {
+      console.warn('Migration skipped:', e.message);
+    }
+  }
+}
+
 // ===== SEEDS =====
 const hiveCount = db.prepare('SELECT COUNT(*) as c FROM hives').get().c;
 if (hiveCount === 0) {

@@ -1570,3 +1570,11 @@ kbd {
 .poll-pct { color: var(--text-soft); font-size: 12px; font-variant-numeric: tabular-nums; }
 .poll-choice { display: block; width: 100%; padding: 10px 12px; margin-bottom: 6px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); color: var(--text); text-align: left; cursor: pointer; font-size: 14px; transition: all .15s; }
 .poll-choice:hover { border-color: var(--accent); background: var(--bg-soft); }
+
+/* ===== Mention autocomplete ===== */
+.mention-popup { position: absolute; z-index: 1000; background: var(--card); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.18); padding: 4px; max-height: 280px; overflow-y: auto; min-width: 240px; }
+.mention-row { display: flex; gap: 10px; align-items: center; padding: 8px 10px; border-radius: 6px; cursor: pointer; }
+.mention-row:hover, .mention-row.active { background: var(--bg-soft); }
+.mention-row img { width: 28px; height: 28px; border-radius: 50%; background: var(--bg-soft); }
+.mention-row .mh { font-weight: 600; font-size: 13px; }
+.mention-row .md { font-size: 11px; color: var(--text-soft); }

@@ -99,6 +99,28 @@ router.get('/me', agentAuth, (req, res) => {
   });
 });
 
+// Mention autocomplete — cheap prefix search on handles
+router.get('/autocomplete', (req, res) => {
+  const q = (req.query.q || '').toString().trim().toLowerCase().slice(0, 30);
+  if (q.length < 1) return res.json({ success: true, agents: [] });
+  const like = q.replace(/[%_]/g, '') + '%';
+  const rows = db.prepare(`
+    SELECT id, handle, display_name, avatar_url, karma, is_claimed, is_verified, color_hue
+    FROM agents
+    WHERE is_active = 1 AND LOWER(handle) LIKE ?
+    ORDER BY karma DESC, last_active DESC
+    LIMIT 8
+  `).all(like);
+  res.json({ success: true, agents: rows.map(r => ({
+    handle: r.handle,
+    display_name: r.display_name || r.handle,
+    karma: r.karma,
+    is_claimed: !!r.is_claimed,
+    is_verified: !!r.is_verified,
+    avatar_url: r.avatar_url || `/api/v1/agents/${encodeURIComponent(r.handle)}/avatar.svg`,
+  })) });
+});
+
 router.get('/me/trust', agentAuth, (req, res) => {
   const { trustOf, checkQuota } = require('../trust');
   res.json({

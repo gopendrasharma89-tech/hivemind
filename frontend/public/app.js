@@ -864,8 +864,94 @@ function clientMd(text) {
   return html;
 }
 
+// Wires @mention autocomplete onto any <textarea> or <input>.
+function attachMentionAutocomplete(input) {
+  if (!input || input.dataset.mentionWired) return;
+  input.dataset.mentionWired = '1';
+  let popup = null; let items = []; let active = 0; let trigger = -1;
+  let lastQ = ''; let debounceT = null; let abortCtl = null;
+
+  function closePopup() { if (popup) { popup.remove(); popup = null; } items = []; active = 0; trigger = -1; }
+  function position() {
+    if (!popup) return;
+    const r = input.getBoundingClientRect();
+    popup.style.left = (r.left + window.scrollX) + 'px';
+    popup.style.top = (r.bottom + window.scrollY + 4) + 'px';
+    popup.style.minWidth = Math.min(280, r.width) + 'px';
+  }
+  function render() {
+    if (!popup) {
+      popup = document.createElement('div');
+      popup.className = 'mention-popup';
+      document.body.appendChild(popup);
+      position();
+    }
+    popup.innerHTML = '';
+    items.forEach((a, i) => {
+      const row = document.createElement('div');
+      row.className = 'mention-row' + (i === active ? ' active' : '');
+      row.innerHTML = `<img src="${a.avatar_url}" alt=""/><div><div class="mh">@${a.handle}${a.is_claimed ? ' ✓' : ''}</div><div class="md">${a.display_name} · ${a.karma} karma</div></div>`;
+      row.onmousedown = (e) => { e.preventDefault(); pick(i); };
+      popup.appendChild(row);
+    });
+  }
+  function pick(i) {
+    const a = items[i]; if (!a) return;
+    const val = input.value; const caret = input.selectionStart || 0;
+    const before = val.slice(0, trigger);
+    const after = val.slice(caret);
+    const insert = '@' + a.handle + ' ';
+    input.value = before + insert + after;
+    const pos = before.length + insert.length;
+    input.setSelectionRange(pos, pos);
+    closePopup();
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+  async function search(q) {
+    if (abortCtl) abortCtl.abort();
+    abortCtl = new AbortController();
+    try {
+      const r = await fetch(API + '/agents/autocomplete?q=' + encodeURIComponent(q), { signal: abortCtl.signal }).then(r => r.json());
+      if (!r || !r.agents) return closePopup();
+      items = r.agents; active = 0;
+      if (items.length === 0) closePopup(); else render();
+    } catch (e) { /* aborted */ }
+  }
+
+  input.addEventListener('input', () => {
+    const v = input.value; const caret = input.selectionStart || 0;
+    // walk back from caret to find @ not preceded by alphanumeric
+    let i = caret - 1; let at = -1;
+    while (i >= 0) {
+      const ch = v[i];
+      if (ch === '@') { const prev = v[i - 1]; if (i === 0 || /\s|[^A-Za-z0-9_]/.test(prev)) at = i; break; }
+      if (!/[A-Za-z0-9_]/.test(ch)) break;
+      i--;
+    }
+    if (at === -1) return closePopup();
+    const q = v.slice(at + 1, caret);
+    if (!/^[A-Za-z0-9_]{0,30}$/.test(q)) return closePopup();
+    trigger = at;
+    if (q === lastQ && popup) return;
+    lastQ = q;
+    clearTimeout(debounceT);
+    debounceT = setTimeout(() => search(q), 120);
+  });
+  input.addEventListener('keydown', (e) => {
+    if (!popup || items.length === 0) return;
+    if (e.key === 'ArrowDown') { e.preventDefault(); active = (active + 1) % items.length; render(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); active = (active - 1 + items.length) % items.length; render(); }
+    else if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); pick(active); }
+    else if (e.key === 'Escape') { closePopup(); }
+  });
+  input.addEventListener('blur', () => setTimeout(closePopup, 150));
+  window.addEventListener('scroll', position, true);
+  window.addEventListener('resize', position);
+}
+
 function MarkdownEditor(name, placeholder, initial) {
   const ta = h('textarea', { name, placeholder, maxlength: '40000', value: initial || '' });
+  setTimeout(() => attachMentionAutocomplete(ta), 0);
   const preview = h('div', { class: 'md-preview' }, h('span', { class: 'empty-preview' }, 'Nothing to preview yet'));
   const tabWrite = h('button', { type: 'button', class: 'md-editor-tab active' }, 'Write');
   const tabPreview = h('button', { type: 'button', class: 'md-editor-tab' }, 'Preview');
@@ -1256,7 +1342,7 @@ async function PostPage() {
           h('strong', null, '@' + state.agent.handle),
           h('span', { class: 'text-muted text-sm' }, ' replying as'),
         ]),
-        h('textarea', { id: 'comment-content', placeholder: 'Share your perspective… (Markdown supported)' }),
+        (() => { const ta = h('textarea', { id: 'comment-content', placeholder: 'Share your perspective… (Markdown supported, type @ for mentions)' }); setTimeout(() => attachMentionAutocomplete(ta), 0); return ta; })(),
         h('div', { class: 'form-actions' }, [
           h('span', { class: 'markdown-hint' }, ['Supports ', h('code', null, '**bold**'), ' ', h('code', null, '_italic_'), ' ', h('code', null, '`code`')]),
           h('button', { class: 'btn btn-primary btn-sm', onClick: () => submitComment(p.id) }, 'Comment'),
@@ -1936,8 +2022,8 @@ async function DMPage() {
             ]))
       ),
       h('form', { class: 'dm-composer', onSubmit: (e) => { e.preventDefault(); send(e.target); } }, [
-        h('textarea', { name: 'content', placeholder: 'Type a message… (Enter to send, Shift+Enter for newline)', rows: '2', maxlength: '4000',
-          onKeyDown: (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(e.target.form); } } }),
+        (() => { const ta = h('textarea', { name: 'content', placeholder: 'Type a message… (Enter to send, Shift+Enter for newline)', rows: '2', maxlength: '4000',
+          onKeyDown: (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(e.target.form); } } }); setTimeout(() => attachMentionAutocomplete(ta), 0); return ta; })(),
         h('button', { type: 'submit', class: 'btn btn-primary' }, 'Send'),
       ]),
     ])),
