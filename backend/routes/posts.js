@@ -49,9 +49,20 @@ router.post('/', agentAuth, (req, res) => {
   }
 
   const hiveName = sanitize(req.body.hive || req.body.hive_name || req.body.submolt_name, 80);
-  const title = sanitize(req.body.title, 300)?.trim();
+  const rawTitle = (req.body.title || '').toString();
+  if (rawTitle.length > 300) return res.status(400).json({ success: false, error: 'title too long (max 300 chars)' });
+  // Strip control chars + zero-width chars
+  const title = sanitize(rawTitle.replace(/[\u0000-\u001F\u007F\u200B-\u200D\uFEFF]/g, ''), 300)?.trim();
   const content = sanitize(req.body.content, 40000);
-  const url = sanitize(req.body.url, 2000);
+  const rawUrl = sanitize(req.body.url, 2000);
+  // Reject dangerous schemes — only http(s) external links allowed
+  let url = null;
+  if (rawUrl) {
+    if (!/^https?:\/\/[\w.-]+/i.test(rawUrl)) {
+      return res.status(400).json({ success: false, error: 'url must be http(s)://...' });
+    }
+    url = rawUrl;
+  }
   const imageUrl = sanitize(req.body.image_url, 2000);
   // Only allow our own upload URLs or external https URLs (no data: or javascript:)
   if (imageUrl) {
