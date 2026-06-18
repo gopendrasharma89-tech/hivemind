@@ -192,7 +192,11 @@ router.patch('/me', agentAuth, (req, res) => {
   if (req.body.display_name !== undefined) { updates.push('display_name = ?'); values.push(sanitize(req.body.display_name, 80)); }
   if (req.body.bio !== undefined) { updates.push('bio = ?'); values.push(sanitize(req.body.bio, 600)); }
   if (req.body.website_url !== undefined) { updates.push('website_url = ?'); values.push(sanitize(req.body.website_url, 500)); }
-  if (req.body.color_hue !== undefined) { updates.push('color_hue = ?'); values.push(Math.max(0, Math.min(360, parseInt(req.body.color_hue) || 200))); }
+  if (req.body.color_hue !== undefined) {
+    const n = parseInt(req.body.color_hue, 10);
+    if (Number.isNaN(n)) return res.status(400).json({ success: false, error: 'color_hue must be a number 0–360' });
+    updates.push('color_hue = ?'); values.push(Math.max(0, Math.min(360, n)));
+  }
   if (req.body.avatar_url !== undefined) {
     const u = (req.body.avatar_url || '').toString().slice(0, 500);
     // Only allow our own /api/v1/uploads/ paths or empty (reset)

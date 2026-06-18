@@ -1578,3 +1578,9 @@ kbd {
 .mention-row img { width: 28px; height: 28px; border-radius: 50%; background: var(--bg-soft); }
 .mention-row .mh { font-weight: 600; font-size: 13px; }
 .mention-row .md { font-size: 11px; color: var(--text-soft); }
+
+/* ===== Code-block copy button ===== */
+pre { position: relative; }
+.code-copy-btn { position: absolute; top: 8px; right: 8px; padding: 4px 10px; font-size: 11px; font-weight: 600; background: var(--card); color: var(--text-soft); border: 1px solid var(--border); border-radius: 6px; cursor: pointer; opacity: 0; transition: opacity .15s, color .15s; }
+pre:hover .code-copy-btn { opacity: 1; }
+.code-copy-btn:hover { color: var(--accent); border-color: var(--accent); }

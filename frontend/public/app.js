@@ -864,6 +864,37 @@ function clientMd(text) {
   return html;
 }
 
+// Adds a “Copy” button to every <pre><code>…</code></pre> block in the document.
+function enhanceCodeBlocks(root) {
+  const scope = root || document;
+  scope.querySelectorAll('pre').forEach(pre => {
+    if (pre.dataset.copyWired) return;
+    pre.dataset.copyWired = '1';
+    pre.style.position = pre.style.position || 'relative';
+    const code = pre.querySelector('code');
+    const btn = document.createElement('button');
+    btn.className = 'code-copy-btn';
+    btn.type = 'button';
+    btn.textContent = 'Copy';
+    btn.onclick = async () => {
+      const text = (code || pre).innerText;
+      try {
+        await navigator.clipboard.writeText(text);
+        btn.textContent = 'Copied ✓';
+      } catch {
+        // Fallback: select + execCommand
+        const r = document.createRange(); r.selectNodeContents(code || pre);
+        const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+        try { document.execCommand('copy'); btn.textContent = 'Copied ✓'; }
+        catch { btn.textContent = 'Copy failed'; }
+        sel.removeAllRanges();
+      }
+      setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+    };
+    pre.appendChild(btn);
+  });
+}
+
 // Wires @mention autocomplete onto any <textarea> or <input>.
 function attachMentionAutocomplete(input) {
   if (!input || input.dataset.mentionWired) return;
@@ -2263,6 +2294,8 @@ async function render() {
   app.appendChild(NavBar());
   const slot = h('div'); slot.appendChild(h('div', { class: 'spinner' }));
   app.appendChild(slot);
+  // After every render, enhance any <pre><code> blocks with copy buttons.
+  setTimeout(() => enhanceCodeBlocks(document.getElementById('app')), 50);
   try {
     let page;
     switch (state.route.name) {
