@@ -92,25 +92,45 @@ async function ensureRepoExists() {
   }
 }
 
+// SQLite file always starts with this 16-byte header ("SQLite format 3\0")
+const SQLITE_MAGIC = Buffer.from('53514c69746520666f726d6174203300', 'hex');
+function looksLikeSqlite(buf) { return buf && buf.length >= 100 && buf.slice(0, 16).equals(SQLITE_MAGIC); }
+
 async function downloadBackup() {
   if (!isEnabled()) return false;
+  // Try HEAD backup first, then fall back to the latest timestamped snapshot if HEAD is corrupt/missing.
+  const candidates = [BACKUP_PATH];
+  // Also try most recent snapshots
   try {
-    const file = await gh('GET', `/repos/${REPO}/contents/${BACKUP_PATH}?ref=${BRANCH}`);
-    if (!file || !file.content) return false;
-    const compressed = Buffer.from(file.content, 'base64');
-    const decompressed = zlib.gunzipSync(compressed);
-    fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
-    fs.writeFileSync(DB_PATH, decompressed);
-    console.log(`✓ Restored DB from GitHub backup (${(decompressed.length / 1024).toFixed(1)} KB)`);
-    return true;
-  } catch (e) {
-    if (e.message.includes('404')) {
-      console.log('ℹ No prior backup found — starting fresh');
-      return false;
+    const list = await gh('GET', `/repos/${REPO}/contents/data/snapshots?ref=${BRANCH}`);
+    if (Array.isArray(list)) {
+      list.sort((a, b) => (a.name < b.name ? 1 : -1));
+      for (const f of list.slice(0, 5)) candidates.push(`data/snapshots/${f.name}`);
     }
-    console.error('⚠ Backup restore failed:', e.message);
-    return false;
+  } catch { /* no snapshots dir yet */ }
+
+  for (const candidate of candidates) {
+    try {
+      const file = await gh('GET', `/repos/${REPO}/contents/${candidate}?ref=${BRANCH}`);
+      if (!file || !file.content) continue;
+      const compressed = Buffer.from(file.content, 'base64');
+      let decompressed;
+      try { decompressed = zlib.gunzipSync(compressed); }
+      catch (e) { console.warn(`⚠ ${candidate} unreadable (gzip): ${e.message}, trying next...`); continue; }
+      if (!looksLikeSqlite(decompressed)) {
+        console.warn(`⚠ ${candidate} not a valid SQLite file, trying next...`);
+        continue;
+      }
+      fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+      fs.writeFileSync(DB_PATH, decompressed);
+      console.log(`✓ Restored DB from ${candidate} (${(decompressed.length / 1024).toFixed(1)} KB)`);
+      return true;
+    } catch (e) {
+      if (!e.message.includes('404')) console.error(`⚠ Restore from ${candidate} failed:`, e.message);
+    }
   }
+  console.log('ℹ No usable backup found — starting fresh');
+  return false;
 }
 
 let lastSha = null;
@@ -152,6 +172,27 @@ async function uploadBackup(forceFinal = false) {
     lastSha = result.content.sha;
     lastHash = hash;
     console.log(`✓ Backed up DB to GitHub (${(compressed.length / 1024).toFixed(1)} KB gzipped)`);
+
+    // Snapshot rotation — keep last ~24 timestamped snapshots so an old corrupt HEAD doesn't kill us.
+    // Only snapshot on every ~Nth backup (sparse) to avoid hitting GitHub commit limits.
+    if (forceFinal || Math.random() < 0.2) {
+      try {
+        const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        await gh('PUT', `/repos/${REPO}/contents/data/snapshots/hivemind-${ts}.db.gz`, {
+          message: `Snapshot ${ts}`, content: compressed.toString('base64'), branch: BRANCH,
+        });
+        // Prune older snapshots (keep newest 24)
+        try {
+          const list = await gh('GET', `/repos/${REPO}/contents/data/snapshots?ref=${BRANCH}`);
+          if (Array.isArray(list) && list.length > 24) {
+            list.sort((a, b) => (a.name < b.name ? 1 : -1));
+            for (const f of list.slice(24)) {
+              await gh('DELETE', `/repos/${REPO}/contents/${f.path}`, { message: 'prune', sha: f.sha, branch: BRANCH }).catch(() => {});
+            }
+          }
+        } catch {}
+      } catch (e) { /* snapshot failure is non-fatal */ }
+    }
     return true;
   } catch (e) {
     console.error('⚠ Backup upload failed:', e.message);
@@ -168,14 +209,42 @@ function startPeriodicBackup() {
   if (intervalHandle) return; // already running
   console.log(`💾 GitHub backup enabled: ${REPO} (every ${INTERVAL / 1000}s)`);
   intervalHandle = setInterval(() => { uploadBackup().catch(() => {}); }, INTERVAL);
-  // Final backup on shutdown
-  const onExit = async () => {
-    console.log('🛑 Shutdown: flushing final backup...');
-    try { await uploadBackup(true); } catch {}
+  // Synchronous final backup on shutdown — holds the process open until upload completes.
+  // Render gives ~30s after SIGTERM before SIGKILL; we use it to flush.
+  let shuttingDown = false;
+  const onExit = async (sig) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`🛑 ${sig}: flushing final backup before exit...`);
+    try {
+      // Force flush with timeout cap of 20s
+      await Promise.race([
+        uploadBackup(true),
+        new Promise(r => setTimeout(r, 20000)),
+      ]);
+      console.log('✓ Final backup flushed');
+    } catch (e) { console.error('✗ Final backup error:', e.message); }
     process.exit(0);
   };
-  process.on('SIGTERM', onExit);
-  process.on('SIGINT', onExit);
+  process.on('SIGTERM', () => onExit('SIGTERM'));
+  process.on('SIGINT',  () => onExit('SIGINT'));
+  // Last-resort: backup on uncaughtException before crashing
+  process.on('uncaughtException', async (err) => {
+    console.error('💥 Uncaught exception:', err);
+    if (!shuttingDown) { shuttingDown = true; try { await uploadBackup(true); } catch {} }
+    process.exit(1);
+  });
+}
+
+// Force a backup right now (used by triggerBackupSoon after write bursts)
+let pendingBackupTimer = null;
+function triggerBackupSoon(delayMs = 5000) {
+  if (!isEnabled()) return;
+  if (pendingBackupTimer) return;
+  pendingBackupTimer = setTimeout(() => {
+    pendingBackupTimer = null;
+    uploadBackup().catch(() => {});
+  }, delayMs);
 }
 
 function reconfigure({ token, repo, branch, intervalSec }) {
@@ -207,4 +276,5 @@ module.exports = {
   startPeriodicBackup,
   uploadBackup,
   downloadBackup,
+  triggerBackupSoon,
 };

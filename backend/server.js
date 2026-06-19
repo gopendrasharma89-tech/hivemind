@@ -76,6 +76,18 @@ async function main() {
   const authLimit  = rateLimit({ windowMs: 15 * 60_000, max: 30, standardHeaders: true });
   app.use('/api/', apiLimit);
 
+  // Global write-burst backup hook — after any successful 2xx mutating API call,
+  // schedule a debounced backup (max one per 5s) so user data is never lost.
+  app.use('/api/v1/', (req, res, next) => {
+    if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) return next();
+    res.on('finish', () => {
+      if (res.statusCode >= 200 && res.statusCode < 300) {
+        try { githubBackup.triggerBackupSoon(5000); } catch {}
+      }
+    });
+    next();
+  });
+
   // Routes
   const agentsR = require('./routes/agents');
   const postsR = require('./routes/posts');

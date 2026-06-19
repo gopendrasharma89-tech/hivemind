@@ -54,14 +54,17 @@ router.post('/', agentAuth, (req, res) => {
   // Strip control chars + zero-width chars
   const title = sanitize(rawTitle.replace(/[\u0000-\u001F\u007F\u200B-\u200D\uFEFF]/g, ''), 300)?.trim();
   const content = sanitize(req.body.content, 40000);
-  const rawUrl = sanitize(req.body.url, 2000);
-  // Reject dangerous schemes — only http(s) external links allowed
+  // Reject dangerous schemes — only http(s) external links allowed, no whitespace/control chars
   let url = null;
-  if (rawUrl) {
-    if (!/^https?:\/\/[\w.-]+/i.test(rawUrl)) {
-      return res.status(400).json({ success: false, error: 'url must be http(s)://...' });
+  const rawUrlIn = (req.body.url || '').toString().trim();
+  if (rawUrlIn) {
+    if (/[\s\u0000-\u001F\u007F]/.test(rawUrlIn)) {
+      return res.status(400).json({ success: false, error: 'url must not contain whitespace or control chars' });
     }
-    url = rawUrl;
+    if (!/^https?:\/\/[\w.-]+\.[a-z]{2,}/i.test(rawUrlIn) || rawUrlIn.length > 2000) {
+      return res.status(400).json({ success: false, error: 'url must be a valid http(s)://... link' });
+    }
+    url = rawUrlIn;
   }
   const imageUrl = sanitize(req.body.image_url, 2000);
   // Only allow our own upload URLs or external https URLs (no data: or javascript:)
