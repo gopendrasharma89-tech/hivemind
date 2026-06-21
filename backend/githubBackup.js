@@ -210,17 +210,16 @@ function startPeriodicBackup() {
   console.log(`💾 GitHub backup enabled: ${REPO} (every ${INTERVAL / 1000}s)`);
   intervalHandle = setInterval(() => { uploadBackup().catch(() => {}); }, INTERVAL);
   // Synchronous final backup on shutdown — holds the process open until upload completes.
-  // Render gives ~30s after SIGTERM before SIGKILL; we use it to flush.
+  // Render gives ~30s after SIGTERM before SIGKILL; we use it to flush every pending write.
   let shuttingDown = false;
   const onExit = async (sig) => {
     if (shuttingDown) return;
     shuttingDown = true;
-    console.log(`🛑 ${sig}: flushing final backup before exit...`);
+    console.log(`🛑 ${sig}: flushing all pending backups before exit...`);
     try {
-      // Force flush with timeout cap of 20s
       await Promise.race([
-        uploadBackup(true),
-        new Promise(r => setTimeout(r, 20000)),
+        flushAll(true),
+        new Promise(r => setTimeout(r, 25000)),
       ]);
       console.log('✓ Final backup flushed');
     } catch (e) { console.error('✗ Final backup error:', e.message); }
@@ -228,23 +227,47 @@ function startPeriodicBackup() {
   };
   process.on('SIGTERM', () => onExit('SIGTERM'));
   process.on('SIGINT',  () => onExit('SIGINT'));
-  // Last-resort: backup on uncaughtException before crashing
   process.on('uncaughtException', async (err) => {
     console.error('💥 Uncaught exception:', err);
-    if (!shuttingDown) { shuttingDown = true; try { await uploadBackup(true); } catch {} }
+    if (!shuttingDown) { shuttingDown = true; try { await flushAll(true); } catch {} }
     process.exit(1);
   });
 }
 
-// Force a backup right now (used by triggerBackupSoon after write bursts)
-let pendingBackupTimer = null;
-function triggerBackupSoon(delayMs = 5000) {
+// Aggressive write-tracked backup scheduler.
+// Strategy: every successful write marks DB as dirty. A short fast-flush timer
+// (default 2s) fires the next backup ASAP. If a backup is already in flight,
+// the dirty flag persists so the *next* one will also run — guaranteeing the
+// most recent write reaches GitHub even during rapid commit + redeploy.
+let dirty = false;
+let fastTimer = null;
+let inFlight = false;
+let pendingPromise = null;
+const FAST_DELAY = 2000;
+
+function triggerBackupSoon(delayMs = FAST_DELAY) {
   if (!isEnabled()) return;
-  if (pendingBackupTimer) return;
-  pendingBackupTimer = setTimeout(() => {
-    pendingBackupTimer = null;
-    uploadBackup().catch(() => {});
+  dirty = true;
+  if (fastTimer) return;
+  fastTimer = setTimeout(async () => {
+    fastTimer = null;
+    while (dirty) {
+      dirty = false;
+      try { pendingPromise = uploadBackup(); await pendingPromise; }
+      catch {}
+      pendingPromise = null;
+    }
   }, delayMs);
+}
+
+// Returns a promise resolved once any in-flight or pending backup is fully flushed.
+async function flushAll(forceFinal = false) {
+  if (fastTimer) { clearTimeout(fastTimer); fastTimer = null; }
+  if (pendingPromise) { try { await pendingPromise; } catch {} }
+  if (dirty || forceFinal) {
+    dirty = false;
+    try { await uploadBackup(true); } catch {}
+  }
 }
 
 function reconfigure({ token, repo, branch, intervalSec }) {
@@ -277,4 +300,5 @@ module.exports = {
   uploadBackup,
   downloadBackup,
   triggerBackupSoon,
+  flushAll,
 };
