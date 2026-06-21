@@ -77,12 +77,13 @@ async function main() {
   app.use('/api/', apiLimit);
 
   // Global write-burst backup hook — after any successful 2xx mutating API call,
-  // schedule a debounced backup (max one per 5s) so user data is never lost.
+  // immediately mark DB dirty and trigger a fast (2s) flush.
+  // The flush runs out-of-band so it doesn't block the user response.
   app.use('/api/v1/', (req, res, next) => {
     if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) return next();
     res.on('finish', () => {
       if (res.statusCode >= 200 && res.statusCode < 300) {
-        try { githubBackup.triggerBackupSoon(5000); } catch {}
+        try { githubBackup.triggerBackupSoon(2000); } catch {}
       }
     });
     next();

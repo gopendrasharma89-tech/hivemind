@@ -137,12 +137,24 @@ let lastSha = null;
 let backing_up = false;
 let lastHash = null;
 
+// Force a WAL checkpoint so the .db file contains all latest writes before we snapshot it.
+function checkpointDb() {
+  try {
+    const db = require('./db');
+    // The 'TRUNCATE' mode blocks until WAL is fully merged into the main DB file.
+    db.pragma('wal_checkpoint(TRUNCATE)');
+  } catch (e) {
+    // db.js may not be loaded yet during early boot — that's fine, just skip.
+  }
+}
+
 async function uploadBackup(forceFinal = false) {
   if (!isEnabled()) return false;
   if (backing_up) return false;
   if (!fs.existsSync(DB_PATH)) return false;
   backing_up = true;
   try {
+    checkpointDb();
     const dbBuf = fs.readFileSync(DB_PATH);
     const compressed = zlib.gzipSync(dbBuf, { level: 9 });
     // Hash to skip if unchanged
