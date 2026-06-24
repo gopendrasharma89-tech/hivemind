@@ -147,6 +147,40 @@ function loadRuntimeBackupConfig() {
   return null;
 }
 
+// Diagnostics: force a backup right now (requires admin token via env or first user)
+router.post('/force-backup', async (req, res) => {
+  const token = (req.headers['x-admin-token'] || '').toString();
+  const expected = process.env.ADMIN_TOKEN || process.env.JWT_SECRET || '';
+  if (!expected || token !== expected) return res.status(401).json({ success: false, error: 'unauthorized' });
+  const githubBackup = require('../githubBackup');
+  try {
+    const ok = await githubBackup.uploadBackup(true);
+    res.json({ success: true, uploaded: ok, enabled: githubBackup.enabled });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// Diagnostics: backup engine state
+router.get('/backup-status', (req, res) => {
+  const githubBackup = require('../githubBackup');
+  const fs = require('fs');
+  const path = require('path');
+  const dbPath = path.join(process.env.DATA_DIR || path.join(__dirname, '..', '..', 'data'), 'hivemind.db');
+  let dbSize = null, walSize = null;
+  try { dbSize = fs.statSync(dbPath).size; } catch {}
+  try { walSize = fs.statSync(dbPath + '-wal').size; } catch {}
+  res.json({
+    success: true,
+    enabled: githubBackup.enabled,
+    has_token: !!process.env.GITHUB_TOKEN,
+    has_repo: !!process.env.GITHUB_BACKUP_REPO,
+    repo: process.env.GITHUB_BACKUP_REPO || null,
+    db_size: dbSize,
+    wal_size: walSize,
+  });
+});
+
 module.exports = router;
 module.exports.loadRuntimeBackupConfig = loadRuntimeBackupConfig;
 module.exports.getConfig = getConfig;
