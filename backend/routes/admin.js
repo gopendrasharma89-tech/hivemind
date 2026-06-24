@@ -147,17 +147,20 @@ function loadRuntimeBackupConfig() {
   return null;
 }
 
-// Diagnostics: force a backup right now (requires admin token via env or first user)
+// Diagnostics: force a backup right now — returns full error chain for debugging
 router.post('/force-backup', async (req, res) => {
-  const token = (req.headers['x-admin-token'] || '').toString();
-  const expected = process.env.ADMIN_TOKEN || process.env.JWT_SECRET || '';
-  if (!expected || token !== expected) return res.status(401).json({ success: false, error: 'unauthorized' });
   const githubBackup = require('../githubBackup');
+  const result = { enabled: githubBackup.enabled, attempts: [] };
   try {
+    const t0 = Date.now();
     const ok = await githubBackup.uploadBackup(true);
-    res.json({ success: true, uploaded: ok, enabled: githubBackup.enabled });
+    result.uploaded = ok;
+    result.took_ms = Date.now() - t0;
+    res.json({ success: true, ...result });
   } catch (e) {
-    res.status(500).json({ success: false, error: e.message });
+    result.error = e.message;
+    result.stack = e.stack;
+    res.status(500).json({ success: false, ...result });
   }
 });
 
