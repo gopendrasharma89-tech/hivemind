@@ -32,9 +32,13 @@ if (TURSO_URL) {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
   console.log('💾 Using local SQLite:', DATA_DIR);
   db = new Database(path.join(DATA_DIR, 'hivemind.db'));
-  db.pragma('journal_mode = WAL');
+  // CRITICAL: Use DELETE journal mode (not WAL) when running on ephemeral disks.
+  // WAL keeps recent writes in a sidecar file (.db-wal) that the backup tool
+  // doesn't capture — leading to silent data loss on every restart.
+  // DELETE mode forces every committed write into the main .db file, which IS backed up.
+  db.pragma('journal_mode = DELETE');
   db.pragma('foreign_keys = ON');
-  db.pragma('synchronous = NORMAL');
+  db.pragma('synchronous = FULL');
 }
 
 // ===== SCHEMA =====
