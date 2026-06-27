@@ -149,21 +149,22 @@ function checkpointDb() {
 }
 
 async function uploadBackup(forceFinal = false) {
-  if (!isEnabled()) return false;
-  if (backing_up) return false;
-  if (!fs.existsSync(DB_PATH)) return false;
+  if (!isEnabled()) { console.log('upload: not enabled'); return false; }
+  if (backing_up) { console.log('upload: already in flight'); return false; }
+  if (!fs.existsSync(DB_PATH)) { console.log('upload: DB file missing at', DB_PATH); return false; }
   backing_up = true;
   try {
     checkpointDb();
     const dbBuf = fs.readFileSync(DB_PATH);
     const compressed = zlib.gzipSync(dbBuf, { level: 9 });
-    // Hash to skip if unchanged
     const crypto = require('crypto');
     const hash = crypto.createHash('sha256').update(compressed).digest('hex');
     if (!forceFinal && hash === lastHash) {
+      console.log('upload: hash unchanged, skipping');
       backing_up = false;
-      return false; // No changes
+      return false;
     }
+    console.log(`upload: pushing ${(dbBuf.length / 1024).toFixed(1)} KB DB to GitHub...`);
 
     // Get current SHA if file exists
     if (lastSha === null) {
@@ -208,9 +209,9 @@ async function uploadBackup(forceFinal = false) {
     return true;
   } catch (e) {
     console.error('⚠ Backup upload failed:', e.message);
-    // Reset SHA so next attempt re-fetches it
     lastSha = null;
-    return false;
+    backing_up = false;
+    throw e;  // surface to caller so /admin/force-backup can return the error
   } finally {
     backing_up = false;
   }
