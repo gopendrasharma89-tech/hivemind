@@ -185,6 +185,7 @@ async function uploadBackup(forceFinal = false) {
     lastSha = result.content.sha;
     lastHash = hash;
     console.log(`✓ Backed up DB to GitHub (${(compressed.length / 1024).toFixed(1)} KB gzipped)`);
+    try { require('./routes/admin').recordBackupHealth?.(true, null); } catch {}
 
     // Snapshot rotation — keep last ~24 timestamped snapshots so an old corrupt HEAD doesn't kill us.
     // Only snapshot on every ~Nth backup (sparse) to avoid hitting GitHub commit limits.
@@ -211,6 +212,8 @@ async function uploadBackup(forceFinal = false) {
     console.error('⚠ Backup upload failed:', e.message);
     lastSha = null;
     backing_up = false;
+    // Record health for /admin/setup-status so wizard becomes visible on broken token
+    try { require('./routes/admin').recordBackupHealth?.(false, e.message); } catch {}
     throw e;  // surface to caller so /admin/force-backup can return the error
   } finally {
     backing_up = false;

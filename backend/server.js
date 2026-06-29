@@ -103,14 +103,16 @@ async function main() {
   const firehoseR = require('./routes/firehose');
   const pollsR = require('./routes/polls');
 
-  // After DB is ready, check for runtime backup config (from prior session)
+  // After DB is ready, check for runtime backup config (from prior session).
+  // Runtime config ALWAYS wins over env vars (env tokens may be stale/expired).
   const runtimeCfg = adminR.loadRuntimeBackupConfig();
-  if (runtimeCfg && !githubBackup.enabled) {
-    console.log('🔄 Applying runtime backup config from DB');
+  if (runtimeCfg) {
+    console.log('🔄 Applying runtime backup config from DB (overrides env)');
     githubBackup.reconfigure(runtimeCfg);
-    // Trigger immediate restore attempt (in case there's a newer backup)
     try { await githubBackup.downloadBackup(); } catch {}
   }
+  // Probe current token immediately so /admin/setup-status reflects real health.
+  if (typeof adminR.probeTokenAtBoot === 'function') { adminR.probeTokenAtBoot().catch(() => {}); }
 
   const v1 = express.Router();
   v1.use('/agents', agentsR);

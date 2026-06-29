@@ -56,17 +56,28 @@ function adminAuth(req, res, next) {
   });
 }
 
+// Cache the last upload outcome to surface broken-token state in setup-status
+let lastBackupHealth = { ok: null, error: null, at: null };
+function recordBackupHealth(ok, error) {
+  lastBackupHealth = { ok, error: error || null, at: Date.now() };
+}
+
 router.get('/setup-status', (req, res) => {
   const totalUsers = db.prepare('SELECT COUNT(*) as c FROM users').get().c;
-  const backupEnabled = githubBackup.enabled || !!getConfig('github_token');
+  const hasRuntime = !!getConfig('github_token');
+  const hasEnv = !!process.env.GITHUB_TOKEN && !!process.env.GITHUB_BACKUP_REPO;
+  const backupEnabled = githubBackup.enabled || hasRuntime;
+  // "needs setup" if no backup OR if last backup failed with 401 / auth error
+  const tokenLooksBad = lastBackupHealth.error && /401|bad credentials|forbidden/i.test(lastBackupHealth.error);
   res.json({
     success: true,
-    needs_setup: !backupEnabled,
+    needs_setup: !backupEnabled || tokenLooksBad,
     admin_configured: isAdminConfigured(),
     has_users: totalUsers > 0,
     backup_enabled: backupEnabled,
-    backup_source: process.env.GITHUB_TOKEN ? 'env' : (getConfig('github_token') ? 'runtime' : 'none'),
+    backup_source: hasRuntime ? 'runtime' : (hasEnv ? 'env' : 'none'),
     persistence_mode: process.env.TURSO_URL ? 'turso' : (backupEnabled ? 'github-backup' : 'ephemeral'),
+    last_backup: lastBackupHealth,
   });
 });
 
@@ -86,7 +97,15 @@ router.get('/config', adminAuth, (req, res) => {
   });
 });
 
-router.post('/config/backup', adminAuth, async (req, res) => {
+// First-time-setup path: if no admin configured yet OR backup currently broken (401),
+// allow the wizard to run without a logged-in user — the deployed instance is otherwise un-recoverable.
+function softAdminAuth(req, res, next) {
+  const tokenLooksBad = lastBackupHealth.error && /401|bad credentials|forbidden/i.test(lastBackupHealth.error);
+  if (!isAdminConfigured() || tokenLooksBad) return next();
+  return adminAuth(req, res, next);
+}
+
+router.post('/config/backup', softAdminAuth, async (req, res) => {
   const token = String(req.body.github_token || '').trim();
   const repo = String(req.body.github_backup_repo || '').trim();
   const interval = Math.max(60, parseInt(req.body.backup_interval_sec || '300', 10));
@@ -132,12 +151,14 @@ router.post('/config/backup', adminAuth, async (req, res) => {
 router.post('/backup/now', adminAuth, async (req, res) => {
   try {
     const ok = await githubBackup.uploadBackup(true);
+    recordBackupHealth(true, null);
     res.json({ success: true, uploaded: ok, message: ok ? 'Backup uploaded' : 'No changes to back up' });
-  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+  } catch (e) { recordBackupHealth(false, e.message); res.status(500).json({ success: false, error: e.message }); }
 });
 
 function loadRuntimeBackupConfig() {
-  if (process.env.GITHUB_TOKEN && process.env.GITHUB_BACKUP_REPO) return null;
+  // Runtime config (from Setup Wizard) ALWAYS wins over env vars.
+  // Env vars may be stale/expired and the user cannot rotate them without dashboard access.
   const tokenEnc = getConfig('github_token');
   const repo = getConfig('github_backup_repo');
   if (tokenEnc && repo) {
@@ -150,16 +171,18 @@ function loadRuntimeBackupConfig() {
 // Diagnostics: force a backup right now — returns full error chain for debugging
 router.post('/force-backup', async (req, res) => {
   const githubBackup = require('../githubBackup');
-  const result = { enabled: githubBackup.enabled, attempts: [] };
+  const result = { enabled: githubBackup.enabled };
   try {
     const t0 = Date.now();
     const ok = await githubBackup.uploadBackup(true);
     result.uploaded = ok;
     result.took_ms = Date.now() - t0;
+    recordBackupHealth(true, null);
     res.json({ success: true, ...result });
   } catch (e) {
     result.error = e.message;
     result.stack = e.stack;
+    recordBackupHealth(false, e.message);
     res.status(500).json({ success: false, ...result });
   }
 });
@@ -186,5 +209,38 @@ router.get('/backup-status', (req, res) => {
 
 module.exports = router;
 module.exports.loadRuntimeBackupConfig = loadRuntimeBackupConfig;
+module.exports.recordBackupHealth = recordBackupHealth;
+
+// Probe the configured token at boot. If GitHub returns 401, surface it immediately
+// so the Setup Wizard becomes visible without waiting for a write-burst backup attempt.
+async function probeTokenAtBoot() {
+  if (!githubBackup.enabled) return;
+  try {
+    await new Promise((resolve, reject) => {
+      const r = https.request({
+        hostname: 'api.github.com', path: '/user', method: 'GET',
+        headers: {
+          'Authorization': `token ${process.env.GITHUB_TOKEN || decrypt(getConfig('github_token')) || ''}`,
+          'User-Agent': 'hivemind-probe', 'Accept': 'application/vnd.github+json',
+        },
+      }, (rs) => {
+        let chunks = [];
+        rs.on('data', c => chunks.push(c));
+        rs.on('end', () => {
+          if (rs.statusCode === 200) resolve();
+          else { let m = 'token check ' + rs.statusCode; try { const b = JSON.parse(Buffer.concat(chunks).toString()); if (b.message) m = b.message + ' (' + rs.statusCode + ')'; } catch {} reject(new Error(m)); }
+        });
+      });
+      r.on('error', reject);
+      r.end();
+    });
+    recordBackupHealth(true, null);
+    console.log('✓ GitHub token probe OK');
+  } catch (e) {
+    recordBackupHealth(false, e.message);
+    console.warn('⚠ GitHub token probe failed:', e.message, '— Setup Wizard will be exposed.');
+  }
+}
+module.exports.probeTokenAtBoot = probeTokenAtBoot;
 module.exports.getConfig = getConfig;
 module.exports.setConfig = setConfig;
