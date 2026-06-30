@@ -302,12 +302,28 @@ function reconfigure({ token, repo, branch, intervalSec }) {
 // This is the chicken-and-egg solution: env token may be expired, DB is gone on fresh container,
 // but the config repo can be read with any token that still has access (or even a public read if marked so).
 async function tryFetchRemoteConfig() {
-  // Try env token first to fetch the config file. If env token is bad, we are stuck — caller falls back to local.
-  if (!TOKEN || !REPO) return null;
+  if (!REPO) return null;
+  // Use raw.githubusercontent.com (no auth needed for public repos). The config file
+  // is encrypted with JWT_SECRET so making the backup repo public doesn't leak the token.
+  const enc = await new Promise((resolve) => {
+    const req = https.request({
+      hostname: 'raw.githubusercontent.com',
+      path: `/${REPO}/${BRANCH}/${CONFIG_PATH}`,
+      method: 'GET',
+      headers: { 'User-Agent': 'hivemind-bootstrap' },
+    }, (rs) => {
+      let chunks = [];
+      rs.on('data', c => chunks.push(c));
+      rs.on('end', () => {
+        if (rs.statusCode === 200) resolve(Buffer.concat(chunks).toString('utf8'));
+        else resolve(null);
+      });
+    });
+    req.on('error', () => resolve(null));
+    req.end();
+  });
+  if (!enc) return null;
   try {
-    const file = await gh('GET', `/repos/${REPO}/contents/${CONFIG_PATH}?ref=${BRANCH}`);
-    if (!file || !file.content) return null;
-    const enc = Buffer.from(file.content, 'base64').toString('utf8');
     const crypto = require('crypto');
     const JWT = process.env.JWT_SECRET || 'hivemind-fallback-' + (process.env.RENDER_INSTANCE_ID || 'local');
     const [ivHex, dataHex] = enc.split(':');
@@ -319,7 +335,8 @@ async function tryFetchRemoteConfig() {
     const parsed = JSON.parse(json);
     return parsed && parsed.token && parsed.repo ? parsed : null;
   } catch (e) {
-    return null;  // env token can't even read the config file — we are stuck on env token only
+    console.warn('⚠ Could not decrypt remote config:', e.message);
+    return null;
   }
 }
 
