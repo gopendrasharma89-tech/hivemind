@@ -31,6 +31,7 @@ function isEnabled() { return !!(TOKEN && REPO); }
 const enabled = isEnabled();
 const DB_PATH = path.join(process.env.DATA_DIR || path.join(__dirname, '..', 'data'), 'hivemind.db');
 const BACKUP_PATH = 'data/hivemind.db.gz';
+const CONFIG_PATH = 'data/config.json';  // small JSON with current working token+repo, encrypted with JWT_SECRET
 
 function gh(method, urlPath, body) {
   return new Promise((resolve, reject) => {
@@ -297,12 +298,106 @@ function reconfigure({ token, repo, branch, intervalSec }) {
   console.log(`✅ Backup reconfigured: ${REPO} (every ${INTERVAL / 1000}s)`);
 }
 
+// Read the working token from a small config file we keep in the backup repo itself.
+// This is the chicken-and-egg solution: env token may be expired, DB is gone on fresh container,
+// but the config repo can be read with any token that still has access (or even a public read if marked so).
+async function tryFetchRemoteConfig() {
+  // Try env token first to fetch the config file. If env token is bad, we are stuck — caller falls back to local.
+  if (!TOKEN || !REPO) return null;
+  try {
+    const file = await gh('GET', `/repos/${REPO}/contents/${CONFIG_PATH}?ref=${BRANCH}`);
+    if (!file || !file.content) return null;
+    const enc = Buffer.from(file.content, 'base64').toString('utf8');
+    const crypto = require('crypto');
+    const JWT = process.env.JWT_SECRET || 'hivemind-fallback-' + (process.env.RENDER_INSTANCE_ID || 'local');
+    const [ivHex, dataHex] = enc.split(':');
+    if (!ivHex || !dataHex) return null;
+    const iv = Buffer.from(ivHex, 'hex');
+    const key = crypto.createHash('sha256').update(JWT).digest();
+    const dec = crypto.createDecipheriv('aes-256-cbc', key, iv);
+    const json = Buffer.concat([dec.update(Buffer.from(dataHex, 'hex')), dec.final()]).toString('utf8');
+    const parsed = JSON.parse(json);
+    return parsed && parsed.token && parsed.repo ? parsed : null;
+  } catch (e) {
+    return null;  // env token can't even read the config file — we are stuck on env token only
+  }
+}
+
+async function saveRemoteConfig(token, repo) {
+  if (!TOKEN || !REPO) return false;
+  try {
+    const crypto = require('crypto');
+    const JWT = process.env.JWT_SECRET || 'hivemind-fallback-' + (process.env.RENDER_INSTANCE_ID || 'local');
+    const iv = crypto.randomBytes(16);
+    const key = crypto.createHash('sha256').update(JWT).digest();
+    const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
+    const enc = Buffer.concat([cipher.update(JSON.stringify({ token, repo }), 'utf8'), cipher.final()]);
+    const payload = iv.toString('hex') + ':' + enc.toString('hex');
+    let sha = null;
+    try { const f = await gh('GET', `/repos/${REPO}/contents/${CONFIG_PATH}?ref=${BRANCH}`); sha = f.sha; } catch {}
+    const body = { message: 'Update working config', content: Buffer.from(payload).toString('base64'), branch: BRANCH };
+    if (sha) body.sha = sha;
+    await gh('PUT', `/repos/${REPO}/contents/${CONFIG_PATH}`, body);
+    return true;
+  } catch (e) {
+    console.warn('⚠ Could not save remote config:', e.message);
+    return false;
+  }
+}
+
+// Read the encrypted runtime config without loading db.js (which would create a fresh DB file).
+// We open the existing DB file directly read-only if it exists; otherwise no runtime config.
+function tryLoadRuntimeConfig() {
+  try {
+    if (!fs.existsSync(DB_PATH)) return null;
+    const Database = require('better-sqlite3');
+    const ro = new Database(DB_PATH, { readonly: true, fileMustExist: true });
+    let tokenEnc = null, repo = null;
+    try {
+      const t = ro.prepare("SELECT value FROM app_config WHERE key='github_token'").get();
+      const r = ro.prepare("SELECT value FROM app_config WHERE key='github_backup_repo'").get();
+      tokenEnc = t?.value; repo = r?.value;
+    } catch {}
+    ro.close();
+    if (!tokenEnc || !repo) return null;
+    // Decrypt using same scheme as admin.js
+    const crypto = require('crypto');
+    const JWT = process.env.JWT_SECRET || 'hivemind-fallback-' + (process.env.RENDER_INSTANCE_ID || 'local');
+    const [ivHex, dataHex] = String(tokenEnc).split(':');
+    if (!ivHex || !dataHex) return null;
+    const iv = Buffer.from(ivHex, 'hex');
+    const key = crypto.createHash('sha256').update(JWT).digest();
+    const dec = crypto.createDecipheriv('aes-256-cbc', key, iv);
+    const token = Buffer.concat([dec.update(Buffer.from(dataHex, 'hex')), dec.final()]).toString('utf8');
+    return { token, repo };
+  } catch (e) {
+    console.warn('⚠ Could not read runtime backup config from DB:', e.message);
+    return null;
+  }
+}
+
 module.exports = {
   get enabled() { return isEnabled(); },
   reconfigure,
+  saveRemoteConfig,
   async init() {
+    // Step 1: try runtime config saved in (still-existing) local DB file from a prior restart.
+    const localRuntime = tryLoadRuntimeConfig();
+    if (localRuntime && localRuntime.token && localRuntime.repo) {
+      TOKEN = localRuntime.token;
+      REPO = localRuntime.repo;
+      console.log('🔑 Using LOCAL runtime backup config');
+    }
+    // Step 2: try to fetch the working token from the backup repo itself.
+    // This handles the case where env token is stale but the backup repo has a fresher one.
+    const remoteCfg = await tryFetchRemoteConfig();
+    if (remoteCfg && remoteCfg.token && remoteCfg.repo) {
+      TOKEN = remoteCfg.token;
+      REPO = remoteCfg.repo;
+      console.log('🔑 Using REMOTE working config from backup repo (overrides env)');
+    }
     if (!isEnabled()) {
-      console.log('ℹ GitHub backup disabled (no env vars; will check runtime config after DB loads)');
+      console.log('ℹ GitHub backup disabled (no env vars or runtime config)');
       return;
     }
     try {

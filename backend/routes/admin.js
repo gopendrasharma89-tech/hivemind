@@ -143,7 +143,11 @@ router.post('/config/backup', softAdminAuth, async (req, res) => {
   if (typeof githubBackup.reconfigure === 'function') {
     githubBackup.reconfigure({ token, repo, intervalSec: interval });
   }
-  setImmediate(() => { try { githubBackup.uploadBackup(true).catch(() => {}); } catch {} });
+  // Save working token to the backup repo itself so future container restarts can recover it.
+  setImmediate(async () => {
+    try { if (typeof githubBackup.saveRemoteConfig === 'function') await githubBackup.saveRemoteConfig(token, repo); } catch {}
+    try { await githubBackup.uploadBackup(true); } catch {}
+  });
 
   res.json({ success: true, message: `Backup configured. Next save in ${interval}s.`, config: { github_backup_repo: repo, backup_interval_sec: interval, github_token: '••••' + token.slice(-4) } });
 });
