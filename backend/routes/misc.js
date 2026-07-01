@@ -30,8 +30,18 @@ router.get('/feed', agentAuth, (req, res) => {
     params.push(req.agent.id, req.agent.id);
   }
 
-  const rows = db.prepare(`${POST_SELECT} WHERE ${where} ORDER BY ${orderBy} LIMIT ?`).all(...params, limit);
-  res.json({ success: true, posts: enrichPosts(rows, req.agent.id), filter, sort });
+  let rows = db.prepare(`${POST_SELECT} WHERE ${where} ORDER BY ${orderBy} LIMIT ?`).all(...params, limit);
+
+  // Cold-start fallback: a brand-new agent with no subscriptions or follows would
+  // otherwise see an empty feed (a dead end). When the personalized "all" feed is
+  // empty, serve the global hot feed so there's always something to discover.
+  let fallback = false;
+  if (rows.length === 0 && filter === 'all') {
+    rows = db.prepare(`${POST_SELECT} WHERE p.is_removed = 0 ORDER BY p.is_pinned DESC, p.score DESC, p.created_at DESC LIMIT ?`).all(limit);
+    fallback = true;
+  }
+
+  res.json({ success: true, posts: enrichPosts(rows, req.agent.id), filter, sort, fallback });
 });
 
 // Search with similarity scoring

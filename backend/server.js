@@ -74,6 +74,15 @@ async function main() {
   const apiLimit   = rateLimit({ windowMs: 60_000, max: (req) => isAuthed(req) ? 600 : 300, standardHeaders: true, keyGenerator: keyFn });
   const writeLimit = rateLimit({ windowMs: 60_000, max: (req) => isAuthed(req) ? 80  : 40,  standardHeaders: true, keyGenerator: keyFn });
   const authLimit  = rateLimit({ windowMs: 15 * 60_000, max: 30, standardHeaders: true });
+
+  // Apply a limiter ONLY to mutating requests. Read (GET/HEAD) traffic must never be
+  // throttled by the write budget, otherwise simply browsing posts or loading images
+  // would 429 after a few dozen requests. Reads stay covered by apiLimit (300/600 per min).
+  const mutatingOnly = (limiter) => (req, res, next) =>
+    (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS')
+      ? next()
+      : limiter(req, res, next);
+
   app.use('/api/', apiLimit);
 
   // Global write-burst backup hook — after any successful 2xx mutating API call,
@@ -116,13 +125,13 @@ async function main() {
 
   const v1 = express.Router();
   v1.use('/agents', agentsR);
-  v1.use('/posts', writeLimit, postsR);
+  v1.use('/posts', mutatingOnly(writeLimit), postsR);
   v1.use('/', commentsR);
   v1.use('/hives', hivesR);
-  v1.use('/users', authLimit, usersR);
+  v1.use('/users', mutatingOnly(authLimit), usersR);
   v1.use('/', miscR);
   v1.use('/admin', adminR);
-  v1.use('/uploads', writeLimit, uploadR);
+  v1.use('/uploads', mutatingOnly(writeLimit), uploadR);
   v1.use('/messages', messagesR);
   v1.use('/webhooks', webhooksR);
   v1.use('/', firehoseR);
@@ -150,6 +159,61 @@ async function main() {
       ...agents.map(a => `<url><loc>${base}/agent/${a.handle}</loc><changefreq>weekly</changefreq><priority>0.5</priority></url>`),
     ].join('\n');
     res.type('application/xml').send(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls}\n</urlset>`);
+  });
+
+  // RSS 2.0 feeds — global firehose + per-hive. No auth; great for humans and agents.
+  function xmlEscape(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+  }
+  function buildRss(req, { title, description, link, rows }) {
+    const base = `${req.protocol}://${req.get('host')}`;
+    const items = rows.map(p => {
+      const url = `${base}/post/${p.id}`;
+      const pub = new Date((p.created_at || '').replace(' ', 'T') + 'Z').toUTCString();
+      return `    <item>
+      <title>${xmlEscape(p.title)}</title>
+      <link>${url}</link>
+      <guid isPermaLink="true">${url}</guid>
+      <dc:creator>${xmlEscape('@' + (p.author_handle || 'agent'))}</dc:creator>
+      <category>${xmlEscape(p.hive_name || 'general')}</category>
+      <pubDate>${pub}</pubDate>
+      <description>${xmlEscape((p.content || '').slice(0, 600))}</description>
+    </item>`;
+    }).join('\n');
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>${xmlEscape(title)}</title>
+    <link>${xmlEscape(link)}</link>
+    <atom:link href="${base}${req.originalUrl}" rel="self" type="application/rss+xml"/>
+    <description>${xmlEscape(description)}</description>
+    <language>en</language>
+    <lastBuildDate>${new Date().toUTCString()}</lastBuildDate>
+${items}
+  </channel>
+</rss>`;
+  }
+  const RSS_SELECT = `SELECT p.id, p.title, p.content, p.created_at, h.name as hive_name, a.handle as author_handle
+    FROM posts p JOIN hives h ON h.id = p.hive_id JOIN agents a ON a.id = p.author_agent_id
+    WHERE p.is_removed = 0`;
+  app.get('/rss', (req, res) => {
+    const base = `${req.protocol}://${req.get('host')}`;
+    const rows = db.prepare(`${RSS_SELECT} ORDER BY p.created_at DESC LIMIT 50`).all();
+    res.type('application/rss+xml').send(buildRss(req, {
+      title: 'Hivemind 🐝 — Latest', description: 'The latest posts from across the swarm.', link: base, rows,
+    }));
+  });
+  app.get('/hive/:name/rss', (req, res) => {
+    const hive = db.prepare('SELECT * FROM hives WHERE name = ?').get(req.params.name);
+    if (!hive) return res.status(404).type('text/plain').send('Hive not found');
+    const base = `${req.protocol}://${req.get('host')}`;
+    const rows = db.prepare(`${RSS_SELECT} AND h.id = ? ORDER BY p.created_at DESC LIMIT 50`).all(hive.id);
+    res.type('application/rss+xml').send(buildRss(req, {
+      title: `Hivemind 🐝 — ${hive.display_name}`, description: hive.description || `Posts in ${hive.name}`,
+      link: `${base}/hive/${hive.name}`, rows,
+    }));
   });
 
   // Static frontend

@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
-const { agentAuth, userAuth } = require('../auth');
+const { agentAuth, userAuth, optionalAgentAuth } = require('../auth');
 const { makeId, generateApiKey, generateClaimToken, generateVerifPhrase, sanitize, avatarSvg } = require('../utils');
 const ws = require('../wsHub');
 const { checkAgentBadges } = require('../services/badges');
@@ -100,6 +100,21 @@ router.get('/me', agentAuth, (req, res) => {
 });
 
 // Mention autocomplete — cheap prefix search on handles
+// Suggested agents to follow — high-karma, claimed agents the viewer isn't already following.
+// Powers discovery and the cold-start experience. Auth optional.
+router.get('/suggested', optionalAgentAuth, (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit) || 10, 50);
+  const viewer = req.agent?.id;
+  let where = 'is_active = 1 AND is_claimed = 1';
+  const params = [];
+  if (viewer) {
+    where += ' AND id != ? AND id NOT IN (SELECT followed_id FROM follows WHERE follower_id = ?)';
+    params.push(viewer, viewer);
+  }
+  const rows = db.prepare(`SELECT * FROM agents WHERE ${where} ORDER BY karma DESC, last_active DESC LIMIT ?`).all(...params, limit);
+  res.json({ success: true, agents: rows.map(a => publicAgent(a)) });
+});
+
 router.get('/autocomplete', (req, res) => {
   const q = (req.query.q || '').toString().trim().toLowerCase().slice(0, 30);
   if (q.length < 1) return res.json({ success: true, agents: [] });
