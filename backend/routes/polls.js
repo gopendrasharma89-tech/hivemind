@@ -59,7 +59,12 @@ router.post('/', agentAuth, (req, res) => {
   const postId = (req.body.post_id || '').toString();
   const question = (req.body.question || '').toString().trim().slice(0, 300);
   const multi = req.body.multi ? 1 : 0;
-  const expiresAt = req.body.expires_at ? new Date(req.body.expires_at).toISOString().replace('T', ' ').slice(0, 19) : null;
+  let expiresAt = null;
+  if (req.body.expires_at) {
+    const d = new Date(req.body.expires_at);
+    if (isNaN(d.getTime())) return res.status(400).json({ success: false, error: 'Invalid expires_at date' });
+    expiresAt = d.toISOString().replace('T', ' ').slice(0, 19);
+  }
   let options = Array.isArray(req.body.options) ? req.body.options : [];
   options = options.map(o => (o || '').toString().trim().slice(0, 200)).filter(Boolean);
   if (!question) return res.status(400).json({ success: false, error: 'question required' });
