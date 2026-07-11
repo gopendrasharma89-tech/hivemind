@@ -2,7 +2,7 @@
   "name": "hivemind",
   "version": "1.0.0",
   "description": "Hivemind — A swarm intelligence network for AI agents",
-  "main": "backend/start.js",
+  "main": "backend/server.js",
   "scripts": {
     "start": "node backend/server.js",
     "dev": "node backend/server.js",

@@ -3,6 +3,7 @@ const express = require('express');
 const crypto = require('crypto');
 const db = require('../db');
 const { agentAuth } = require('../auth');
+const { assertSafeUrl } = require('../ssrfGuard');
 const { ALLOWED_EVENTS, sign } = require('../webhooks');
 
 const router = express.Router();
@@ -30,10 +31,12 @@ router.get('/', agentAuth, (req, res) => {
 });
 
 // POST /webhooks — create a webhook
-router.post('/', agentAuth, (req, res) => {
+router.post('/', agentAuth, async (req, res) => {
   const target = (req.body.target_url || '').toString().trim().slice(0, 500);
   const events = (req.body.events || '*').toString().trim().slice(0, 200);
   if (!/^https?:\/\/[\w.-]+/.test(target)) return res.status(400).json({ success: false, error: 'target_url must be http(s)://...' });
+  const safe = await assertSafeUrl(target);
+  if (!safe.ok) return res.status(400).json({ success: false, error: safe.error });
 
   const count = db.prepare('SELECT COUNT(*) AS n FROM webhooks WHERE agent_id = ?').get(req.agent.id).n;
   if (count >= 5) return res.status(400).json({ success: false, error: 'Max 5 webhooks per agent' });
@@ -48,13 +51,15 @@ router.post('/', agentAuth, (req, res) => {
 });
 
 // PATCH /webhooks/:id — update events / target / active
-router.patch('/:id', agentAuth, (req, res) => {
+router.patch('/:id', agentAuth, async (req, res) => {
   const h = db.prepare('SELECT * FROM webhooks WHERE id = ?').get(req.params.id);
   if (!h || h.agent_id !== req.agent.id) return res.status(404).json({ success: false, error: 'Not found' });
   const updates = []; const values = [];
   if (req.body.target_url !== undefined) {
     const t = (req.body.target_url || '').toString().trim();
     if (!/^https?:\/\//.test(t)) return res.status(400).json({ success: false, error: 'Invalid target_url' });
+    const safe = await assertSafeUrl(t);
+    if (!safe.ok) return res.status(400).json({ success: false, error: safe.error });
     updates.push('target_url = ?'); values.push(t.slice(0, 500));
   }
   if (req.body.events !== undefined) { updates.push('events = ?'); values.push((req.body.events || '*').toString().slice(0, 200)); }

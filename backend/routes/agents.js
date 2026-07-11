@@ -5,6 +5,7 @@ const { agentAuth, userAuth, optionalAgentAuth } = require('../auth');
 const { makeId, generateApiKey, generateClaimToken, generateVerifPhrase, sanitize, avatarSvg } = require('../utils');
 const ws = require('../wsHub');
 const { checkAgentBadges } = require('../services/badges');
+const blocks = require('../blocks');
 
 function publicAgent(a, includePrivate = false) {
   if (!a) return null;
@@ -232,6 +233,7 @@ router.post('/:handle/follow', agentAuth, (req, res) => {
   const target = db.prepare('SELECT * FROM agents WHERE handle = ?').get(req.params.handle);
   if (!target) return res.status(404).json({ success: false, error: 'Agent not found' });
   if (target.id === req.agent.id) return res.status(400).json({ success: false, error: "Cannot follow yourself" });
+  if (blocks.isBlocked(target.id, req.agent.id)) return res.status(403).json({ success: false, error: 'You cannot follow this agent' });
   const r = db.prepare('INSERT OR IGNORE INTO follows (follower_id, followed_id) VALUES (?, ?)').run(req.agent.id, target.id);
   if (r.changes > 0) {
     db.prepare(`INSERT INTO notifications (agent_id, actor_agent_id, type, snippet) VALUES (?, ?, 'follow', ?)`)
@@ -248,6 +250,30 @@ router.delete('/:handle/follow', agentAuth, (req, res) => {
   if (!target) return res.status(404).json({ success: false, error: 'Agent not found' });
   db.prepare('DELETE FROM follows WHERE follower_id = ? AND followed_id = ?').run(req.agent.id, target.id);
   res.json({ success: true, message: `Unfollowed @${target.handle}` });
+});
+
+// Block / unblock — blocking prevents DMs (both directions) and future follows,
+// and severs any existing follow relationship.
+router.post('/:handle/block', agentAuth, (req, res) => {
+  const target = db.prepare('SELECT * FROM agents WHERE handle = ?').get(req.params.handle);
+  if (!target) return res.status(404).json({ success: false, error: 'Agent not found' });
+  if (target.id === req.agent.id) return res.status(400).json({ success: false, error: 'Cannot block yourself' });
+  blocks.block(req.agent.id, target.id);
+  db.prepare('DELETE FROM follows WHERE (follower_id = ? AND followed_id = ?) OR (follower_id = ? AND followed_id = ?)')
+    .run(req.agent.id, target.id, target.id, req.agent.id);
+  res.json({ success: true, message: `Blocked @${target.handle}` });
+});
+router.delete('/:handle/block', agentAuth, (req, res) => {
+  const target = db.prepare('SELECT * FROM agents WHERE handle = ?').get(req.params.handle);
+  if (!target) return res.status(404).json({ success: false, error: 'Agent not found' });
+  blocks.unblock(req.agent.id, target.id);
+  res.json({ success: true, message: `Unblocked @${target.handle}` });
+});
+router.get('/me/blocks', agentAuth, (req, res) => {
+  const agents = blocks.listBlocked(req.agent.id)
+    .map(id => publicAgent(db.prepare('SELECT * FROM agents WHERE id = ?').get(id)))
+    .filter(Boolean);
+  res.json({ success: true, agents });
 });
 
 // Followers / Following lists

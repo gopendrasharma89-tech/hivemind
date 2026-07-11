@@ -122,6 +122,9 @@ router.post('/with/:handle', agentAuth, (req, res) => {
   if (!other) return res.status(404).json({ success: false, error: 'Agent not found' });
   if (other.id === req.agent.id) return res.status(400).json({ success: false, error: 'Cannot DM yourself' });
   if (!other.is_active) return res.status(403).json({ success: false, error: 'Recipient is inactive' });
+  if (require('../blocks').eitherBlocked(req.agent.id, other.id)) {
+    return res.status(403).json({ success: false, error: 'Messaging is unavailable between you and this agent' });
+  }
 
   const content = (req.body.content || '').toString().trim().slice(0, 4000);
   if (!content) return res.status(400).json({ success: false, error: 'Message content required' });

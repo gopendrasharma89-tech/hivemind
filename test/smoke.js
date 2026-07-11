@@ -141,6 +141,45 @@ async function main() {
   }
   ok(!read429, '60 rapid GET /posts requests never hit 429');
 
+  console.log('Webhooks: SSRF-protected registration...');
+  const badHook = await req('POST', `${API}/webhooks`, { token: apiKey, body: { target_url: 'http://169.254.169.254/latest/meta-data/', events: '*' } });
+  ok(badHook.status === 400, 'webhook to cloud-metadata IP rejected (SSRF guard)');
+  const loHook = await req('POST', `${API}/webhooks`, { token: apiKey, body: { target_url: 'http://127.0.0.1:9/x', events: '*' } });
+  ok(loHook.status === 400, 'webhook to loopback rejected (SSRF guard)');
+  const goodHook = await req('POST', `${API}/webhooks`, { token: apiKey, body: { target_url: 'https://example.com/hook', events: 'post.*' } });
+  ok(goodHook.json?.success === true, 'webhook to a public host accepted');
+
+  console.log('Polls: create + vote + validation...');
+  const pollPost = await req('POST', `${API}/posts`, { token: apiKey, body: { hive: 'general', title: 'Poll post', content: 'vote!' } });
+  const pollPostId = pollPost.json.post.id;
+  const poll = await req('POST', `${API}/polls`, { token: apiKey, body: { post_id: pollPostId, question: 'Best bee?', options: ['Worker', 'Queen', 'Drone'] } });
+  ok(poll.json?.success && poll.json.poll.options.length === 3, 'poll created with 3 options');
+  const pv = await req('POST', `${API}/polls/${poll.json.poll.id}/vote`, { token: apiKey, body: { option_ids: [poll.json.poll.options[1].id] } });
+  ok(pv.json?.success && pv.json.poll.total_votes === 1, 'poll vote counted');
+  const badPollDate = await req('POST', `${API}/polls`, { token: apiKey, body: { post_id: 'p_none', question: 'x', options: ['a', 'b'], expires_at: 'not-a-date' } });
+  ok(badPollDate.status === 400, 'invalid poll expires_at returns 400 (not a crash)');
+
+  console.log('Direct messages + blocking...');
+  const reg2 = await req('POST', `${API}/agents/register`, { body: { handle: 'SmokeMate' + (Date.now() % 100000), display_name: 'Mate', model_family: 'gpt' } });
+  const apiKey2 = reg2.json.agent.api_key;
+  const myHandle = reg.json.agent.handle;
+  const mateHandle = reg2.json.agent.handle;
+  const dm1 = await req('POST', `${API}/messages/with/${myHandle}`, { token: apiKey2, body: { content: 'hi there' } });
+  ok(dm1.json?.success === true, 'agent can send a DM');
+  const unread = await req('GET', `${API}/messages/unread-count`, { token: apiKey });
+  ok(unread.json?.unread >= 1, 'DM shows up in recipient unread count');
+  const blockRes = await req('POST', `${API}/agents/${mateHandle}/block`, { token: apiKey });
+  ok(blockRes.json?.success === true, 'agent can block another agent');
+  const dm2 = await req('POST', `${API}/messages/with/${myHandle}`, { token: apiKey2, body: { content: 'again' } });
+  ok(dm2.status === 403, 'blocked agent cannot DM (403)');
+  const followBlocked = await req('POST', `${API}/agents/${myHandle}/follow`, { token: apiKey2 });
+  ok(followBlocked.status === 403, 'blocked agent cannot follow (403)');
+  const myBlocks = await req('GET', `${API}/agents/me/blocks`, { token: apiKey });
+  ok(myBlocks.json?.agents?.some(a => a.handle === mateHandle), 'block list shows the blocked agent');
+  const unblockRes = await req('DELETE', `${API}/agents/${mateHandle}/block`, { token: apiKey });
+  const dm3 = await req('POST', `${API}/messages/with/${myHandle}`, { token: apiKey2, body: { content: 'friends again' } });
+  ok(unblockRes.json?.success === true && dm3.json?.success === true, 'unblock restores messaging');
+
   console.log(`\n✅ All ${passed} smoke assertions passed.\n`);
 }
 

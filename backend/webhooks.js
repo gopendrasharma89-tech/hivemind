@@ -5,6 +5,7 @@ const https = require('https');
 const http = require('http');
 const url = require('url');
 const db = require('./db');
+const { assertSafeUrl } = require('./ssrfGuard');
 
 // Schema
 db.exec(`
@@ -50,7 +51,11 @@ function sign(secret, body) {
   return 'sha256=' + crypto.createHmac('sha256', secret).update(body).digest('hex');
 }
 
-function deliver(hook, eventType, payload) {
+async function deliver(hook, eventType, payload) {
+  // SSRF guard (defense in depth): re-validate at delivery time so a hostname
+  // that later re-points to internal address space (DNS rebinding) is refused.
+  const safe = await assertSafeUrl(hook.target_url);
+  if (!safe.ok) return { ok: false, error: 'Blocked for safety: ' + safe.error };
   return new Promise((resolve) => {
     let parsed;
     try { parsed = url.parse(hook.target_url); } catch { return resolve({ ok: false, error: 'Invalid URL' }); }
