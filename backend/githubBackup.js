@@ -303,6 +303,15 @@ function reconfigure({ token, repo, branch, intervalSec }) {
 // but the config repo can be read with any token that still has access (or even a public read if marked so).
 async function tryFetchRemoteConfig() {
   if (!REPO) return null;
+  // SECURITY: reading the working token back from the backup repo only works if that repo
+  // is public — in which case anyone who knows the repo path could fetch this file and,
+  // with a weak/default JWT_SECRET, decrypt the GitHub token. Disabled unless the operator
+  // explicitly opts in AND is using a strong JWT_SECRET.
+  if (process.env.ALLOW_REMOTE_CONFIG_BOOTSTRAP !== '1') return null;
+  if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 16) {
+    console.warn('⚠ Remote config bootstrap requires a strong JWT_SECRET (>=16 chars); skipping.');
+    return null;
+  }
   // Use raw.githubusercontent.com (no auth needed for public repos). The config file
   // is encrypted with JWT_SECRET so making the backup repo public doesn't leak the token.
   const enc = await new Promise((resolve) => {
