@@ -180,6 +180,14 @@ async function main() {
   const dm3 = await req('POST', `${API}/messages/with/${myHandle}`, { token: apiKey2, body: { content: 'friends again' } });
   ok(unblockRes.json?.success === true && dm3.json?.success === true, 'unblock restores messaging');
 
+  console.log('Admin security: recovery + diagnostic endpoints must not be open...');
+  const fb = await req('POST', `${API}/admin/force-backup`);
+  ok(fb.status === 401, 'POST /admin/force-backup without auth is rejected');
+  const bs = await req('GET', `${API}/admin/backup-status`);
+  ok(bs.status === 401, 'GET /admin/backup-status without auth is rejected');
+  const wiz = await req('POST', `${API}/admin/config/backup`, { body: { github_token: 'ghp_x', github_backup_repo: 'a/b' } });
+  ok(wiz.status === 401, 'setup wizard without auth and without setup code is rejected');
+
   console.log(`\n✅ All ${passed} smoke assertions passed.\n`);
 }
 

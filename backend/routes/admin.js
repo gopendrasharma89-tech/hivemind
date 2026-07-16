@@ -18,6 +18,28 @@ db.exec(`CREATE TABLE IF NOT EXISTS app_config (
 
 const JWT_SECRET = process.env.JWT_SECRET || 'hivemind-fallback-' + (process.env.RENDER_INSTANCE_ID || 'local');
 
+// Setup code gate for the UNAUTHENTICATED recovery path.
+// When the backup token is broken (401) or no admin exists yet, the Setup Wizard must
+// still be reachable so a dead instance can be recovered. But it must NOT be open to the
+// whole internet. We require a short setup code that is printed only to the server logs
+// (which the legitimate operator can read, but an anonymous attacker cannot).
+// Operators may also pin a stable code via the SETUP_KEY env var.
+const SETUP_CODE = process.env.SETUP_KEY || crypto.randomBytes(6).toString('hex');
+function announceSetupCode() {
+  if (process.env.SETUP_KEY) {
+    console.log('🔐 Recovery Setup uses SETUP_KEY from env.');
+  } else {
+    console.log(`🔐 Recovery Setup code (needed only for unauthenticated setup): ${SETUP_CODE}`);
+  }
+}
+function setupCodeValid(req) {
+  const provided = String(req.get('x-setup-code') || req.body.setup_code || '').trim();
+  if (!provided) return false;
+  const a = Buffer.from(provided);
+  const b = Buffer.from(SETUP_CODE);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
 function encrypt(plain) {
   if (!plain) return null;
   const iv = crypto.randomBytes(16);
@@ -101,7 +123,13 @@ router.get('/config', adminAuth, (req, res) => {
 // allow the wizard to run without a logged-in user — the deployed instance is otherwise un-recoverable.
 function softAdminAuth(req, res, next) {
   const tokenLooksBad = lastBackupHealth.error && /401|bad credentials|forbidden/i.test(lastBackupHealth.error);
-  if (!isAdminConfigured() || tokenLooksBad) return next();
+  const recoveryMode = !isAdminConfigured() || tokenLooksBad;
+  if (recoveryMode) {
+    // Unauthenticated recovery is allowed ONLY with the correct setup code.
+    if (setupCodeValid(req)) return next();
+    // A logged-in admin can always proceed without the code.
+    return adminAuth(req, res, next);
+  }
   return adminAuth(req, res, next);
 }
 
@@ -173,7 +201,7 @@ function loadRuntimeBackupConfig() {
 }
 
 // Diagnostics: force a backup right now — returns full error chain for debugging
-router.post('/force-backup', async (req, res) => {
+router.post('/force-backup', adminAuth, async (req, res) => {
   const githubBackup = require('../githubBackup');
   const result = { enabled: githubBackup.enabled };
   try {
@@ -192,7 +220,7 @@ router.post('/force-backup', async (req, res) => {
 });
 
 // Diagnostics: backup engine state
-router.get('/backup-status', (req, res) => {
+router.get('/backup-status', adminAuth, (req, res) => {
   const githubBackup = require('../githubBackup');
   const fs = require('fs');
   const path = require('path');
@@ -246,5 +274,6 @@ async function probeTokenAtBoot() {
   }
 }
 module.exports.probeTokenAtBoot = probeTokenAtBoot;
+module.exports.announceSetupCode = announceSetupCode;
 module.exports.getConfig = getConfig;
 module.exports.setConfig = setConfig;

@@ -122,6 +122,7 @@ async function main() {
   }
   // Probe current token immediately so /admin/setup-status reflects real health.
   if (typeof adminR.probeTokenAtBoot === 'function') { adminR.probeTokenAtBoot().catch(() => {}); }
+  if (typeof adminR.announceSetupCode === 'function') { adminR.announceSetupCode(); }
 
   const v1 = express.Router();
   v1.use('/agents', agentsR);
