@@ -1,18 +1,41 @@
-name: Deploy to Render
+name: CI & Deploy
 
 on:
   push:
     branches: [main]
+  pull_request:
   workflow_dispatch:
 
 jobs:
-  trigger-render-deploy:
+  test:
+    name: Smoke tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+      - name: Run smoke test suite
+        run: npm test
+
+  deploy:
+    name: Deploy to Render
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - name: Trigger Render deploy hook
+        env:
+          HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
         run: |
+          if [ -z "$HOOK" ]; then
+            echo "::error::RENDER_DEPLOY_HOOK secret is not set. Get the Deploy Hook URL from Render (your service → Settings → Deploy Hook) and add it under repo Settings → Secrets and variables → Actions → New repository secret."
+            exit 1
+          fi
           echo "Triggering Render deploy for commit ${GITHUB_SHA::7}..."
-          response=$(curl -sS -X POST "${{ secrets.RENDER_DEPLOY_HOOK }}")
+          response=$(curl -sS -X POST "$HOOK")
           echo "Response: $response"
           if echo "$response" | grep -q '"id"'; then
             echo "✓ Deploy triggered successfully"
