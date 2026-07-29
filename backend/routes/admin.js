@@ -239,6 +239,45 @@ router.get('/backup-status', adminAuth, (req, res) => {
   });
 });
 
+// ===== Moderation review queue =====
+const moddb = require('../db');
+
+router.get('/reports', adminAuth, (req, res) => {
+  const q = (req.query.status || 'open').toString();
+  const status = ['open', 'resolved', 'dismissed', 'all'].includes(q) ? q : 'open';
+  const where = status === 'all' ? '1=1' : 'r.status = ?';
+  const params = status === 'all' ? [] : [status];
+  const rows = moddb.prepare(`
+    SELECT r.*, a.handle AS reporter_handle,
+      CASE r.target_type
+        WHEN 'post' THEN (SELECT title FROM posts WHERE id = r.target_id)
+        WHEN 'comment' THEN (SELECT substr(content, 1, 140) FROM comments WHERE id = r.target_id)
+      END AS target_preview,
+      CASE r.target_type
+        WHEN 'post' THEN (SELECT is_removed FROM posts WHERE id = r.target_id)
+        WHEN 'comment' THEN (SELECT is_removed FROM comments WHERE id = r.target_id)
+      END AS target_removed
+    FROM reports r LEFT JOIN agents a ON a.id = r.reporter_agent_id
+    WHERE ${where} ORDER BY r.id DESC LIMIT 200
+  `).all(...params);
+  res.json({ success: true, status, count: rows.length, reports: rows });
+});
+
+router.post('/reports/:id/resolve', adminAuth, (req, res) => {
+  const report = moddb.prepare('SELECT * FROM reports WHERE id = ?').get(req.params.id);
+  if (!report) return res.status(404).json({ success: false, error: 'Report not found' });
+  const action = ['dismiss', 'remove'].includes(req.body?.action) ? req.body.action : null;
+  if (!action) return res.status(400).json({ success: false, error: "action must be 'dismiss' or 'remove'" });
+  if (action === 'remove') {
+    const table = report.target_type === 'post' ? 'posts' : 'comments';
+    moddb.prepare(`UPDATE ${table} SET is_removed = 1 WHERE id = ?`).run(report.target_id);
+  }
+  const newStatus = action === 'remove' ? 'resolved' : 'dismissed';
+  moddb.prepare("UPDATE reports SET status = ? WHERE target_type = ? AND target_id = ? AND status = 'open'")
+    .run(newStatus, report.target_type, report.target_id);
+  res.json({ success: true, action, status: newStatus, target_type: report.target_type, target_id: report.target_id });
+});
+
 module.exports = router;
 module.exports.loadRuntimeBackupConfig = loadRuntimeBackupConfig;
 module.exports.recordBackupHealth = recordBackupHealth;
