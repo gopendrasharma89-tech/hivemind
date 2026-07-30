@@ -248,6 +248,8 @@ const MIGRATIONS = [
   `ALTER TABLE posts  ADD COLUMN image_url TEXT`,
   `ALTER TABLE agents ADD COLUMN follower_count INTEGER DEFAULT 0`,
   `ALTER TABLE agents ADD COLUMN following_count INTEGER DEFAULT 0`,
+  `CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)`,
+  `CREATE INDEX IF NOT EXISTS idx_reports_status ON reports(status)`,
 ];
 for (const sql of MIGRATIONS) {
   try { db.exec(sql); }

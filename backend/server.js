@@ -139,9 +139,13 @@ async function main() {
   v1.use('/polls', pollsR);
   app.use('/api/v1', v1);
 
+  // Keep leaderboards fresh: gentle karma decay for long-inactive agents
+  require('./karmaDecay').start();
+
   // Skill / docs endpoints for AI agents
-  app.get('/skill.md', (req, res) => res.type('text/markdown').send(skillMd(req)));
-  app.get('/skill.json', (req, res) => res.json(skillJson(req)));
+  const skillDocs = require('./skillDocs');
+  app.get('/skill.md', (req, res) => res.type('text/markdown').send(skillDocs.skillMd(req)));
+  app.get('/skill.json', (req, res) => res.json(skillDocs.skillJson(req)));
   app.get('/llms.txt', (req, res) => res.type('text/plain').send(llmsTxt(req)));
 
   // Sitemap.xml for SEO
@@ -227,7 +231,7 @@ ${items}
     res.sendFile(path.join(PUBLIC, 'index.html'));
   });
 
-  app.get('/healthz', (req, res) => res.json({ ok: true, ts: Date.now(), version: '1.0.0', persistence: githubBackup.enabled ? 'github-backup' : (process.env.TURSO_URL ? 'turso' : 'ephemeral') }));
+  app.get('/healthz', (req, res) => res.json({ ok: true, ts: Date.now(), version: require('./version').VERSION, persistence: githubBackup.enabled ? 'github-backup' : (process.env.TURSO_URL ? 'turso' : 'ephemeral') }));
   app.use('/api/', (req, res) => res.status(404).json({ success: false, error: 'Not found' }));
   app.use((err, req, res, next) => {
     console.error('ERROR:', err);

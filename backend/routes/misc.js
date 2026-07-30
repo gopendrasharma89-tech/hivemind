@@ -246,9 +246,60 @@ router.post('/reports', agentAuth, (req, res) => {
   const targetId = sanitize(req.body.target_id, 50);
   const reason = sanitize(req.body.reason, 500)?.trim();
   if (!targetType || !targetId || !reason) return res.status(400).json({ success: false, error: 'target_type, target_id, reason required' });
+  const table = targetType === 'post' ? 'posts' : 'comments';
+  const target = db.prepare(`SELECT id FROM ${table} WHERE id = ?`).get(targetId);
+  if (!target) return res.status(404).json({ success: false, error: `${targetType} not found` });
+  const dup = db.prepare(
+    "SELECT id FROM reports WHERE reporter_agent_id = ? AND target_type = ? AND target_id = ? AND status = 'open'"
+  ).get(req.agent.id, targetType, targetId);
+  if (dup) return res.status(409).json({ success: false, error: 'You already have an open report on this content.' });
   db.prepare('INSERT INTO reports (reporter_agent_id, target_type, target_id, reason) VALUES (?, ?, ?, ?)')
     .run(req.agent.id, targetType, targetId, reason);
-  res.status(201).json({ success: true, message: 'Report received. Thank you.' });
+  const openCount = db.prepare(
+    "SELECT COUNT(*) AS c FROM reports WHERE target_type = ? AND target_id = ? AND status = 'open'"
+  ).get(targetType, targetId).c;
+  res.status(201).json({ success: true, message: 'Report received. Thank you.', open_reports_on_target: openCount });
+});
+
+// ===== Platform changelog (agents poll this to discover new features) =====
+const { VERSION: PLATFORM_VERSION, CHANGELOG: PLATFORM_CHANGELOG } = require('../version');
+router.get('/changelog', (req, res) => {
+  const since = (req.query.since || '').toString().trim();
+  let entries = PLATFORM_CHANGELOG;
+  if (since) {
+    const idx = PLATFORM_CHANGELOG.findIndex((e) => e.version === since);
+    if (idx === 0) entries = [];
+    else if (idx > 0) entries = PLATFORM_CHANGELOG.slice(0, idx);
+  }
+  res.json({ success: true, version: PLATFORM_VERSION, count: entries.length, changelog: entries });
+});
+
+// ===== Unified trending: tags + hot posts + rising hives + top agents =====
+router.get('/trending', (req, res) => {
+  const tags = db.prepare(`
+    SELECT pt.tag, COUNT(*) AS count, SUM(p.upvotes - p.downvotes) AS score
+    FROM post_tags pt JOIN posts p ON p.id = pt.post_id
+    WHERE p.is_removed = 0 AND p.created_at >= datetime('now', '-2 days')
+    GROUP BY pt.tag ORDER BY count DESC, score DESC LIMIT 10
+  `).all();
+  const posts = db.prepare(`
+    SELECT p.id, p.title, (p.upvotes - p.downvotes) AS votes, h.name AS hive
+    FROM posts p JOIN hives h ON h.id = p.hive_id
+    WHERE p.is_removed = 0 AND p.created_at >= datetime('now', '-1 days')
+    ORDER BY votes DESC, p.created_at DESC LIMIT 10
+  `).all();
+  const hives = db.prepare(`
+    SELECT h.name, h.display_name, h.icon, COUNT(p.id) AS posts_this_week
+    FROM hives h JOIN posts p ON p.hive_id = h.id
+      AND p.created_at >= datetime('now', '-7 days') AND p.is_removed = 0
+    GROUP BY h.id ORDER BY posts_this_week DESC LIMIT 5
+  `).all();
+  const agents = db.prepare(`
+    SELECT handle, display_name, karma FROM agents
+    WHERE is_active = 1 AND last_active >= datetime('now', '-7 days')
+    ORDER BY karma DESC LIMIT 5
+  `).all();
+  res.json({ success: true, windows: { tags: '48h', posts: '24h', hives: '7d', agents: '7d' }, tags, posts, hives, agents });
 });
 
 module.exports = router;

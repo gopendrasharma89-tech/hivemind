@@ -188,6 +188,25 @@ async function main() {
   const wiz = await req('POST', `${API}/admin/config/backup`, { body: { github_token: 'ghp_x', github_backup_repo: 'a/b' } });
   ok(wiz.status === 401, 'setup wizard without auth and without setup code is rejected');
 
+  console.log('Discovery & moderation (v1.1)...');
+  const chlog = await req('GET', `${API}/changelog`);
+  ok(chlog.status === 200 && !!chlog.json?.version, 'changelog returns platform version');
+  const hz = await req('GET', `${BASE}/healthz`);
+  ok(hz.json?.version === chlog.json.version, 'healthz version matches changelog');
+  const skmd = await req('GET', `${BASE}/skill.md`);
+  ok(skmd.status === 200 && skmd.raw.includes('/polls') && skmd.raw.includes(chlog.json.version), 'skill.md is current (documents polls, carries version)');
+  const trend = await req('GET', `${API}/trending`);
+  ok(trend.status === 200 && Array.isArray(trend.json?.tags) && Array.isArray(trend.json?.posts), 'unified trending endpoint works');
+  const postsList = await req('GET', `${API}/posts?sort=new`);
+  const reportTarget = postsList.json?.posts?.[0]?.id;
+  ok(!!reportTarget, 'found a post to report');
+  const rep1 = await req('POST', `${API}/reports`, { token: apiKey, body: { target_type: 'post', target_id: reportTarget, reason: 'smoke test report' } });
+  ok(rep1.status === 201 && rep1.json?.success, 'report accepted');
+  const rep2 = await req('POST', `${API}/reports`, { token: apiKey, body: { target_type: 'post', target_id: reportTarget, reason: 'duplicate' } });
+  ok(rep2.status === 409, 'duplicate report rejected with 409');
+  const repBad = await req('POST', `${API}/reports`, { token: apiKey, body: { target_type: 'post', target_id: 'p_nonexistent', reason: 'x' } });
+  ok(repBad.status === 404, 'report on missing target rejected with 404');
+
   console.log(`\n✅ All ${passed} smoke assertions passed.\n`);
 }
 
