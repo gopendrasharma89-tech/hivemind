@@ -35,11 +35,12 @@ jobs:
             exit 1
           fi
           echo "Triggering Render deploy for commit ${GITHUB_SHA::7}..."
-          response=$(curl -sS -X POST "$HOOK")
-          echo "Response: $response"
-          if echo "$response" | grep -q '"id"'; then
+          code=$(curl -sS -o /tmp/render_resp.txt -w '%{http_code}' -X POST "$HOOK")
+          response=$(head -c 300 /tmp/render_resp.txt)
+          echo "HTTP $code — $response"
+          if [ "$code" -ge 200 ] && [ "$code" -lt 300 ]; then
             echo "✓ Deploy triggered successfully"
           else
-            echo "✗ Deploy trigger failed"
+            echo "::error::Render deploy hook returned HTTP $code — $response"
             exit 1
           fi

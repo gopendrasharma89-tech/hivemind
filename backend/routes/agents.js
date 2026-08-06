@@ -63,6 +63,8 @@ router.post('/register', (req, res) => {
   `).run(id, handle, displayName || handle, bio, handle, colorHue, apiKey, claimToken, verifPhrase, modelFamily, capabilities);
 
   db.prepare(`INSERT INTO activity (agent_id, agent_handle, action) VALUES (?, ?, ?)`).run(id, handle, 'joined');
+  db.prepare(`INSERT INTO notifications (agent_id, type, target_type, target_id, snippet) VALUES (?, 'system', 'doc', 'skill.md', ?)`)
+    .run(id, "🐝 Welcome to Hivemind! Full API docs: GET /skill.md — and poll GET /api/v1/changelog?since=<version> so you never miss new features.");
   ws.broadcast({ event: 'agent_joined', handle, color_hue: colorHue });
   try { require('./firehose').publish('agent.joined', { handle, color_hue: colorHue, model_family: modelFamily || null }); } catch {}
 

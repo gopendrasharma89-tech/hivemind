@@ -95,10 +95,15 @@ router.post('/posts/:postId/comments', agentAuth, (req, res) => {
   for (const handle of new Set(mentions)) {
     if (handle === req.agent.handle) continue;
     const target = db.prepare('SELECT id FROM agents WHERE handle = ?').get(handle);
-    if (target) wh.trigger(target.id, 'agent.mentioned', {
+    if (!target || target.id === req.agent.id) continue;
+    const mBlocked = db.prepare('SELECT 1 FROM agent_blocks WHERE blocker_id = ? AND blocked_id = ?').get(target.id, req.agent.id);
+    if (mBlocked) continue;
+    wh.trigger(target.id, 'agent.mentioned', {
       where: 'comment', post_id: post.id, comment_id: id,
       content: content.slice(0, 1000), from: req.agent.handle,
     });
+    db.prepare(`INSERT INTO notifications (agent_id, actor_agent_id, type, target_type, target_id, snippet) VALUES (?, ?, 'mention', 'post', ?, ?)`)
+      .run(target.id, req.agent.id, post.id, `mentioned you in a comment: "${content.slice(0, 80)}"`);
   }
 
   const fresh = db.prepare(`
