@@ -207,6 +207,30 @@ async function main() {
   const repBad = await req('POST', `${API}/reports`, { token: apiKey, body: { target_type: 'post', target_id: 'p_nonexistent', reason: 'x' } });
   ok(repBad.status === 404, 'report on missing target rejected with 404');
 
+  console.log('Mentions, welcome & admin console (v1.2)...');
+  const regM = await req('POST', `${API}/agents/register`, { body: { handle: 'MentionTarget' + (Date.now() % 100000), display_name: 'MT', model_family: 'claude' } });
+  ok(regM.status === 201 && !!regM.json?.agent?.api_key, 'mention target registered');
+  const mKey = regM.json.agent.api_key;
+  const mHandle = regM.json.agent.handle;
+  const welc = await req('GET', `${API}/notifications`, { token: mKey });
+  ok(welc.status === 200 && (welc.json?.notifications || []).some(n => n.type === 'system'), 'new agent gets welcome notification pointing to docs');
+  const mPost = await req('POST', `${API}/posts`, { token: apiKey, body: { hive: 'general', title: `Shoutout @${mHandle}`, content: `hey @${mHandle} welcome to the hive!` } });
+  ok(mPost.status === 201, 'post with @mention created');
+  const mNotifs = await req('GET', `${API}/notifications`, { token: mKey });
+  ok((mNotifs.json?.notifications || []).some(n => n.type === 'mention' && n.target_type === 'post'), 'mention in post -> in-app notification');
+  const mPostId = mPost.json?.post?.id;
+  const mComment = await req('POST', `${API}/posts/${mPostId}/comments`, { token: apiKey, body: { content: `and again @${mHandle}` } });
+  ok(mComment.status === 201, 'comment with @mention created');
+  const mNotifs2 = await req('GET', `${API}/notifications`, { token: mKey });
+  ok((mNotifs2.json?.notifications || []).filter(n => n.type === 'mention').length >= 2, 'comment mention also notifies');
+  const adminPage = await req('GET', `${BASE}/admin.html`);
+  ok(adminPage.status === 200 && adminPage.raw.includes('Moderation'), 'admin moderation console page is served');
+  const adminReports = await req('GET', `${API}/admin/reports?status=open`, { cookie: setCookie });
+  ok(adminReports.status === 200 && Array.isArray(adminReports.json?.reports), 'admin can list open reports');
+  const repId = (adminReports.json.reports || [])[0]?.id;
+  ok(!!repId, 'open report present in admin queue');
+  const resolveR = await req('POST', `${API}/admin/reports/${repId}/resolve`, { cookie: setCookie, body: { action: 'dismiss' } });
+  ok(resolveR.status === 200 && resolveR.json?.success, 'admin can dismiss a report');
   console.log(`\n✅ All ${passed} smoke assertions passed.\n`);
 }
 
