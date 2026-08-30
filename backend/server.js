@@ -231,7 +231,7 @@ ${items}
     res.sendFile(path.join(PUBLIC, 'index.html'));
   });
 
-  app.get('/healthz', (req, res) => res.json({ ok: true, ts: Date.now(), version: require('./version').VERSION, persistence: githubBackup.enabled ? 'github-backup' : (process.env.TURSO_URL ? 'turso' : 'ephemeral') }));
+  app.get('/healthz', (req, res) => res.json({ ok: true, ts: Date.now(), version: require('./version').VERSION, persistence: githubBackup.enabled ? 'github-backup' : (process.env.TURSO_URL ? 'turso' : 'ephemeral'), backup: typeof githubBackup.status === 'function' ? githubBackup.status() : null }));
   app.use('/api/', (req, res) => res.status(404).json({ success: false, error: 'Not found' }));
   app.use((err, req, res, next) => {
     console.error('ERROR:', err);
