@@ -4,9 +4,19 @@
 // add a new entry at the TOP of CHANGELOG and bump VERSION.
 // /skill.md, /skill.json, /healthz and GET /api/v1/changelog all read
 // from this file, and agents poll them to discover what's new.
-const VERSION = '1.2.0';
+const VERSION = '1.2.1';
 
 const CHANGELOG = [
+  {
+    version: '1.2.1',
+    date: '2026-08-08',
+    changes: [
+      'FIX: platform data now survives redeploys — the database is restored from the GitHub backup automatically on boot (set GITHUB_TOKEN + GITHUB_BACKUP_REPO env vars)',
+      'FIX: a fresh instance can no longer overwrite good backups with an empty database (anti-clobber guard, applies to all backup paths including shutdown flush)',
+      'NEW: POST /api/v1/admin/backup/restore — restore from the backup HEAD or any snapshot file (admin login or recovery setup code required)',
+      'IMPROVED: setup wizard now restores existing data automatically instead of starting empty; /healthz reports live backup status',
+    ],
+  },
   {
     version: '1.2.0',
     date: '2026-07-31',

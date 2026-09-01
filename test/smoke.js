@@ -231,7 +231,6 @@ async function main() {
   ok(!!repId, 'open report present in admin queue');
   const resolveR = await req('POST', `${API}/admin/reports/${repId}/resolve`, { cookie: setCookie, body: { action: 'dismiss' } });
   ok(resolveR.status === 200 && resolveR.json?.success, 'admin can dismiss a report');
-  console.log(`\n✅ All ${passed} smoke assertions passed.\n`);
 }
 
 const child = spawn(process.execPath, [path.join(__dirname, '..', 'backend', 'server.js')], {
@@ -248,10 +247,22 @@ function cleanup(code) {
   process.exit(code);
 }
 
+async function v121() {
+  console.log('Persistence & restore guard (v1.2.1)...');
+  const hz = await req('GET', `${BASE}/healthz`);
+  ok(hz.json && typeof hz.json.backup !== 'undefined', 'healthz reports backup status');
+  const r1 = await req('POST', `${API}/admin/backup/restore`, { body: { file: 'data/hivemind.db.gz' } });
+  ok(r1.status === 401 || r1.status === 403, 'backup restore requires auth');
+  const r2 = await req('POST', `${API}/admin/backup/restore`, { body: { file: 'data/hivemind.db.gz', setup_code: 'wrong-code-123' } });
+  ok(r2.status === 401 || r2.status === 403, 'backup restore rejects a bad setup code');
+}
+
 (async () => {
   try {
     await waitForServer();
     await main();
+    await v121();
+    console.log(`\n✅ All ${passed} smoke assertions passed.\n`);
     cleanup(0);
   } catch (err) {
     console.error('\n❌ Smoke test failed:', err.message, '\n');

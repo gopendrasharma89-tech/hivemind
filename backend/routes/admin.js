@@ -171,6 +171,31 @@ router.post('/config/backup', softAdminAuth, async (req, res) => {
   if (typeof githubBackup.reconfigure === 'function') {
     githubBackup.reconfigure({ token, repo, intervalSec: interval });
   }
+  // If this instance is fresh (no data) but the backup repo already has data,
+  // RESTORE it instead of overwriting it with an empty database.
+  if (githubBackup.localDbIsFresh && githubBackup.localDbIsFresh()) {
+    try {
+      await githubBackup.restoreFromRemote(null);
+      // Persist the just-entered config into the restored DB so it survives the restart.
+      try {
+        const Database = require('better-sqlite3');
+        const pth = require('path');
+        const dbp = pth.join(process.env.DATA_DIR || pth.join(__dirname, '..', '..', 'data'), 'hivemind.db');
+        const raw = new Database(dbp);
+        raw.exec(`CREATE TABLE IF NOT EXISTS app_config (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT DEFAULT (datetime('now')))`);
+        const up = raw.prepare(`INSERT INTO app_config (key, value, updated_at) VALUES (?, ?, datetime('now')) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`);
+        up.run('github_token', encrypt(token));
+        up.run('github_backup_repo', repo);
+        up.run('backup_interval_sec', String(interval));
+        raw.close();
+      } catch (e) { console.warn('Could not persist config into restored DB:', e.message); }
+      res.json({ success: true, restored: true, message: 'Backup configured — existing data found and RESTORED. Restarting now...' });
+      setTimeout(() => process.exit(0), 800);
+      return;
+    } catch (e) {
+      console.log('No existing backup to restore (' + e.message + ') — starting fresh.');
+    }
+  }
   // Save working token to the backup repo itself so future container restarts can recover it.
   setImmediate(async () => {
     try { if (typeof githubBackup.saveRemoteConfig === 'function') await githubBackup.saveRemoteConfig(token, repo); } catch {}
@@ -182,10 +207,42 @@ router.post('/config/backup', softAdminAuth, async (req, res) => {
 
 router.post('/backup/now', adminAuth, async (req, res) => {
   try {
-    const ok = await githubBackup.uploadBackup(true);
+    const ok = await githubBackup.uploadBackup(true, req.body?.force === true);
     recordBackupHealth(true, null);
-    res.json({ success: true, uploaded: ok, message: ok ? 'Backup uploaded' : 'No changes to back up' });
+    res.json({ success: true, uploaded: ok, message: ok ? 'Backup uploaded' : 'No changes to back up (or guard active — pass force:true to override)' });
   } catch (e) { recordBackupHealth(false, e.message); res.status(500).json({ success: false, error: e.message }); }
+});
+
+// Restore the database from the backup repo — HEAD by default, or any file path
+// inside that repo (e.g. "data/snapshots/hivemind-....db.gz" or "rescue/....db.gz").
+// Auth: admin login OR the recovery setup code (x-setup-code header / setup_code in body).
+// On success the process restarts so the platform comes back up on the restored data.
+async function doRestore(req, res) {
+  const file = String(req.body?.file || '').trim() || null;
+  if (file && (file.includes('..') || !/^[\w./-]+$/.test(file))) {
+    return res.status(400).json({ success: false, error: 'Invalid file path' });
+  }
+  try {
+    await githubBackup.restoreFromRemote(file);
+    let agents = null, posts = null;
+    try {
+      const Database = require('better-sqlite3');
+      const pth = require('path');
+      const dbp = pth.join(process.env.DATA_DIR || pth.join(__dirname, '..', '..', 'data'), 'hivemind.db');
+      const ro = new Database(dbp, { readonly: true, fileMustExist: true });
+      agents = ro.prepare('SELECT COUNT(*) c FROM agents').get().c;
+      posts = ro.prepare('SELECT COUNT(*) c FROM posts').get().c;
+      ro.close();
+    } catch {}
+    res.json({ success: true, restored: file || 'data/hivemind.db.gz', agents, posts, message: 'Restored. Restarting to load the data...' });
+    setTimeout(() => process.exit(0), 800);
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+}
+router.post('/backup/restore', (req, res) => {
+  if (setupCodeValid(req)) return doRestore(req, res);
+  return adminAuth(req, res, () => doRestore(req, res));
 });
 
 function loadRuntimeBackupConfig() {

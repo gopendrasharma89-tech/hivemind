@@ -97,10 +97,10 @@ async function ensureRepoExists() {
 const SQLITE_MAGIC = Buffer.from('53514c69746520666f726d6174203300', 'hex');
 function looksLikeSqlite(buf) { return buf && buf.length >= 100 && buf.slice(0, 16).equals(SQLITE_MAGIC); }
 
-async function downloadBackup() {
+async function downloadBackup(explicitPath) {
   if (!isEnabled()) return false;
   // Try HEAD backup first, then fall back to the latest timestamped snapshot if HEAD is corrupt/missing.
-  const candidates = [BACKUP_PATH];
+  const candidates = explicitPath ? [explicitPath] : [BACKUP_PATH];
   // Also try most recent snapshots
   try {
     const list = await gh('GET', `/repos/${REPO}/contents/data/snapshots?ref=${BRANCH}`);
@@ -113,6 +113,7 @@ async function downloadBackup() {
   for (const candidate of candidates) {
     try {
       const file = await gh('GET', `/repos/${REPO}/contents/${candidate}?ref=${BRANCH}`);
+      if (candidate === BACKUP_PATH) remoteHeadSeen = true;
       if (!file || !file.content) continue;
       const compressed = Buffer.from(file.content, 'base64');
       let decompressed;
@@ -123,10 +124,14 @@ async function downloadBackup() {
         continue;
       }
       fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+      try { fs.unlinkSync(DB_PATH + '-wal'); } catch {}
+      try { fs.unlinkSync(DB_PATH + '-shm'); } catch {}
       fs.writeFileSync(DB_PATH, decompressed);
+      restoredOnBoot = true;
       console.log(`✓ Restored DB from ${candidate} (${(decompressed.length / 1024).toFixed(1)} KB)`);
       return true;
     } catch (e) {
+      if (candidate === BACKUP_PATH && e.message.includes('404')) remoteHeadSeen = false;
       if (!e.message.includes('404')) console.error(`⚠ Restore from ${candidate} failed:`, e.message);
     }
   }
@@ -137,6 +142,11 @@ async function downloadBackup() {
 let lastSha = null;
 let backing_up = false;
 let lastHash = null;
+let restoredOnBoot = false;
+let remoteHeadSeen = null; // null = unknown, true = exists, false = confirmed absent
+let lastBackupAt = null;
+let lastBackupError = null;
+let guardTripped = false;
 
 // Force a WAL checkpoint so the .db file contains all latest writes before we snapshot it.
 function checkpointDb() {
@@ -149,10 +159,43 @@ function checkpointDb() {
   }
 }
 
-async function uploadBackup(forceFinal = false) {
+// A local DB is "fresh" when it holds no community data (no agents, no posts).
+// Such a DB must never replace a real remote backup — that is exactly how
+// production data was lost on redeploys before v1.2.1.
+function localDbIsFresh() {
+  try {
+    if (!fs.existsSync(DB_PATH)) return true;
+    const Database = require('better-sqlite3');
+    const ro = new Database(DB_PATH, { readonly: true, fileMustExist: true });
+    let agents = 0, posts = 0;
+    try { agents = ro.prepare('SELECT COUNT(*) c FROM agents').get().c; } catch {}
+    try { posts = ro.prepare('SELECT COUNT(*) c FROM posts').get().c; } catch {}
+    ro.close();
+    return agents === 0 && posts === 0;
+  } catch { return false; }
+}
+
+async function uploadBackup(forceFinal = false, overrideGuard = false) {
   if (!isEnabled()) { console.log('upload: not enabled'); return false; }
   if (backing_up) { console.log('upload: already in flight'); return false; }
   if (!fs.existsSync(DB_PATH)) { console.log('upload: DB file missing at', DB_PATH); return false; }
+  // ANTI-CLOBBER GUARD: an instance that never restored and holds an empty DB
+  // must not overwrite an existing remote backup (applies to periodic, fast and
+  // final SIGTERM backups alike). Override only via explicit admin force.
+  if (!overrideGuard && !restoredOnBoot && localDbIsFresh()) {
+    if (remoteHeadSeen === null) {
+      try { await gh('GET', `/repos/${REPO}/contents/${BACKUP_PATH}?ref=${BRANCH}`); remoteHeadSeen = true; }
+      catch (e) { remoteHeadSeen = e.message.includes('404') ? false : null; }
+    }
+    if (remoteHeadSeen !== false) {
+      guardTripped = true;
+      const msg = 'guard: refusing to overwrite remote backup with an empty local DB — restore first (POST /api/v1/admin/backup/restore) or force a backup';
+      console.warn('🛑 ' + msg);
+      lastBackupError = msg;
+      try { require('./routes/admin').recordBackupHealth?.(false, msg); } catch {}
+      return false;
+    }
+  }
   backing_up = true;
   try {
     checkpointDb();
@@ -185,6 +228,9 @@ async function uploadBackup(forceFinal = false) {
     const result = await gh('PUT', `/repos/${REPO}/contents/${BACKUP_PATH}`, body);
     lastSha = result.content.sha;
     lastHash = hash;
+    lastBackupAt = Date.now();
+    lastBackupError = null;
+    guardTripped = false;
     console.log(`✓ Backed up DB to GitHub (${(compressed.length / 1024).toFixed(1)} KB gzipped)`);
     try { require('./routes/admin').recordBackupHealth?.(true, null); } catch {}
 
@@ -211,6 +257,7 @@ async function uploadBackup(forceFinal = false) {
     return true;
   } catch (e) {
     console.error('⚠ Backup upload failed:', e.message);
+    lastBackupError = String(e.message || '').slice(0, 140);
     lastSha = null;
     backing_up = false;
     // Record health for /admin/setup-status so wizard becomes visible on broken token
@@ -292,7 +339,7 @@ function reconfigure({ token, repo, branch, intervalSec }) {
   if (repo) REPO = repo;
   if (branch) BRANCH = branch;
   if (intervalSec) INTERVAL = intervalSec * 1000;
-  lastSha = null; lastHash = null;
+  lastSha = null; lastHash = null; remoteHeadSeen = null;
   if (intervalHandle) { clearInterval(intervalHandle); intervalHandle = null; }
   startPeriodicBackup();
   console.log(`✅ Backup reconfigured: ${REPO} (every ${INTERVAL / 1000}s)`);
@@ -404,6 +451,22 @@ function tryLoadRuntimeConfig() {
 
 module.exports = {
   get enabled() { return isEnabled(); },
+  localDbIsFresh,
+  status() {
+    return {
+      enabled: isEnabled(),
+      restored_on_boot: restoredOnBoot,
+      guard_active: guardTripped,
+      last_backup_at: lastBackupAt,
+      last_backup_error: lastBackupError,
+    };
+  },
+  async restoreFromRemote(file) {
+    if (!isEnabled()) throw new Error('Backup not configured');
+    const okRestore = await downloadBackup(file || undefined);
+    if (!okRestore) throw new Error(`No usable backup found at ${file || BACKUP_PATH}`);
+    return true;
+  },
   reconfigure,
   saveRemoteConfig,
   async init() {
@@ -428,7 +491,18 @@ module.exports = {
     }
     try {
       await ensureRepoExists();
-      await downloadBackup();
+      if (fs.existsSync(DB_PATH) && !localDbIsFresh()) {
+        // Process restart inside a live container: the local DB is newer than any
+        // remote copy. Never overwrite it on boot.
+        restoredOnBoot = true;
+        console.log('✓ Existing local DB found — skipping remote restore');
+      } else if (process.env.RESTORE_PIN) {
+        console.log(`📌 RESTORE_PIN set — restoring from ${process.env.RESTORE_PIN}`);
+        const pinned = await downloadBackup(process.env.RESTORE_PIN);
+        if (!pinned) await downloadBackup();
+      } else {
+        await downloadBackup();
+      }
     } catch (e) {
       console.error('⚠ Backup init failed:', e.message);
     }
